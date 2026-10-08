@@ -1,4 +1,4 @@
-import os, json
+import os, json, re, base64, mimetypes
 from openai import OpenAI
 from db import conn
 
@@ -55,3 +55,24 @@ def weekly_summary():
         return r.choices[0].message.content.strip()
     except Exception as e:
         return f"Summary unavailable: {e}"
+
+PHOTO_SYSTEM = """You compare two progress photos for a fitness app. Describe only what is visibly different:
+posture, visible muscle definition or fullness, framing/lighting/pose differences that limit the comparison.
+Rules: NEVER estimate body-fat percentage, weight, or health conditions; no medical claims; be cautious and encouraging.
+If the two photos differ in lighting, angle or distance, say the comparison is unreliable. Relate changes to the training data only as 'consistent with', never as proof.
+Answer in under 120 words."""
+
+def _img_part(path):
+    mime = mimetypes.guess_type(path)[0] or "image/jpeg"
+    with open(path, "rb") as f: b = base64.b64encode(f.read()).decode()
+    return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b}"}}
+
+def compare_photos(before_path, after_path, d1, d2):
+    cl = client(); model = os.getenv("VISION_MODEL")
+    if not cl: return "Demo mode: add your API key to .env to enable photo analysis."
+    if not model: return "Set VISION_MODEL in .env to an image-capable model (see README), then restart the server."
+    content = [{"type": "text", "text": f"Photo 1 is BEFORE ({d1}). Photo 2 is AFTER ({d2}).\nTraining data: {build_context()}\nDescribe the visible changes."},
+               _img_part(before_path), _img_part(after_path)]
+    r = cl.chat.completions.create(model=model, max_tokens=500, temperature=0.3,
+        messages=[{"role": "system", "content": PHOTO_SYSTEM}, {"role": "user", "content": content}])
+    return re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip() or "No description returned."

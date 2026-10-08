@@ -1,7 +1,7 @@
 import os, json, uuid, datetime as dt
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -18,6 +18,7 @@ class MetricIn(BaseModel): weight: float; height: float | None = None
 class FormIn(BaseModel): exercise: str = "squat"; reps: list[dict]
 class RoutineIn(BaseModel): name: str; items: list[dict]
 class ChatIn(BaseModel): message: str
+class AnalyzeIn(BaseModel): before_id: int; after_id: int
 
 @app.get("/api/exercises")
 def exercises():
@@ -65,15 +66,59 @@ def chat(m: ChatIn):
         c2 = db.conn(); c2.execute("INSERT INTO coach_message(role,content) VALUES('assistant',?)", ("".join(out),)); c2.commit(); c2.close()
     return StreamingResponse(gen(), media_type="text/plain")
 
+ALLOWED_IMG = {".jpg", ".jpeg", ".png", ".webp"}
+
 @app.post("/api/photos")
-async def photo(file: UploadFile = File(...)):
-    name = f"{uuid.uuid4().hex}{os.path.splitext(file.filename or '.jpg')[1] or '.jpg'}"
-    with open(os.path.join(UP, name), "wb") as fh: fh.write(await file.read())
-    c = db.conn(); c.execute("INSERT INTO progress_photo(date,path,caption) VALUES(?,?,?)", (today(), f"/uploads/{name}", "")); c.commit(); c.close(); return {"ok": True}
+async def photo(file: UploadFile = File(...), taken: str | None = Form(None)):
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in ALLOWED_IMG or not (file.content_type or "").startswith("image/"):
+        raise HTTPException(400, "Photos must be JPG, PNG or WEBP images. Videos go in the Form Check tab.")
+    try: day = dt.date.fromisoformat(taken).isoformat() if taken else today()
+    except ValueError: raise HTTPException(400, "Date must look like 2026-10-08")
+    data = await file.read()
+    if len(data) > 10_000_000: raise HTTPException(400, "Image too large (max 10 MB)")
+    name = f"{uuid.uuid4().hex}{ext}"
+    with open(os.path.join(UP, name), "wb") as fh: fh.write(data)
+    c = db.conn(); cur = c.execute("INSERT INTO progress_photo(date,path,caption) VALUES(?,?,?)", (day, f"/uploads/{name}", ""))
+    c.commit(); pid = cur.lastrowid; c.close(); return {"ok": True, "id": pid}
+
+def live_photos(c):
+    rows = [dict(x) for x in c.execute("SELECT * FROM progress_photo ORDER BY id")]
+    keep = []
+    for r in rows:
+        if os.path.exists(os.path.join(UP, os.path.basename(r["path"]))): keep.append(r)
+        else: c.execute("DELETE FROM progress_photo WHERE id=?", (r["id"],))
+    c.commit(); return keep
+
+@app.post("/api/photos/analyze")
+def analyze_photos(a: AnalyzeIn):
+    if a.before_id == a.after_id: raise HTTPException(400, "Pick two different photos.")
+    c = db.conn(); rows = {r["id"]: r for r in live_photos(c)}
+    b, f = rows.get(a.before_id), rows.get(a.after_id)
+    if not b or not f:
+        c.close(); raise HTTPException(400, "One of the photos no longer exists.")
+    if f["date"] < b["date"]:
+        c.close(); raise HTTPException(400, "The After photo must be dated later than the Before photo.")
+    path = lambda r: os.path.join(UP, os.path.basename(r["path"]))
+    try:
+        text = coach.compare_photos(path(b), path(f), b["date"], f["date"])
+    except Exception as e:
+        c.close(); return {"caption": f"Analysis failed: {e}"}
+    c.execute("UPDATE progress_photo SET caption=? WHERE id=?", (text, f["id"])); c.commit(); c.close()
+    return {"caption": text}
+
+@app.delete("/api/photos/{pid}")
+def del_photo(pid: int):
+    c = db.conn(); r = c.execute("SELECT path FROM progress_photo WHERE id=?", (pid,)).fetchone()
+    if r:
+        try: os.remove(os.path.join(UP, os.path.basename(r["path"])))
+        except OSError: pass
+        c.execute("DELETE FROM progress_photo WHERE id=?", (pid,)); c.commit()
+    c.close(); return {"ok": True}
 
 @app.get("/api/photos")
 def photos():
-    c = db.conn(); r = [dict(x) for x in c.execute("SELECT * FROM progress_photo ORDER BY id")]; c.close(); return r
+    c = db.conn(); r = live_photos(c); c.close(); return r
 
 @app.delete("/api/data")
 def wipe():  # full deletion, per privacy plan

@@ -14,6 +14,13 @@ canvas{max-width:100%;border-radius:8px}table{width:100%;border-collapse:collaps
 #chat{height:300px;overflow:auto;background:#0f1115;border-radius:8px;padding:10px;white-space:pre-wrap}
 .u{color:var(--ac)}small,.mut{color:var(--mut)}#fb{font-size:18px;font-weight:600;min-height:28px}
 .ph{display:flex;gap:8px;flex-wrap:wrap}.ph img{width:48%;border-radius:8px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}.slot{border:2px solid;border-radius:10px;padding:10px}.slot h4{margin:0 0 8px}
+.bf{border-color:#e8a33d}.bf h4{color:#e8a33d}.af{border-color:var(--ac)}.af h4{color:var(--ac)}
+.slot input[type=file]{width:100%}.prev{min-height:40px;margin-bottom:6px}.prev img{width:100%;height:220px;object-fit:cover;border-radius:8px}
+.tl{display:flex;gap:10px;overflow-x:auto;padding-bottom:6px}.tp{min-width:130px;font-size:12px;border:2px solid transparent;border-radius:8px;padding:4px}
+.tp img{width:120px;height:150px;object-fit:cover;border-radius:6px}.tp.b{border-color:#e8a33d}.tp.a{border-color:var(--ac)}.tp button.a{padding:3px 6px;margin:2px;font-size:11px}
+.lbl{display:flex;justify-content:space-between;font-weight:700;margin:4px 0}
+@media(max-width:600px){.two{grid-template-columns:1fr}}
 </style></head><body>
 <header>AI Fitness <span>Coach</span> <small>· Nebius + NVIDIA Nemotron</small></header>
 <nav id="nav"></nav>
@@ -29,8 +36,8 @@ canvas{max-width:100%;border-radius:8px}table{width:100%;border-collapse:collaps
 
 <section id="form"><h3>Squat form check</h3>
 <p class="mut">Film from the side, full body in frame, good light. Runs on-device — video never leaves your browser. Coaching feedback, not medical advice.</p>
-<button class="a" id="cam">Start camera</button> <input type="file" id="vf" accept="video/*"> <button class="a" id="stop">Finish &amp; analyze</button>
-<div id="fb"></div><div>Reps: <b id="rc">0</b></div>
+<button class="a" id="cam">Start camera</button> <input type="file" id="vf" accept="video/*,.mov,.mp4,.m4v,.webm,.avi"> <button class="a" id="stop">Finish &amp; analyze</button>
+<div id="vmsg" class="mut"></div><div id="fb"></div><div>Reps: <b id="rc">0</b></div>
 <video id="v" playsinline muted style="display:none"></video><canvas id="cv" width="640" height="480"></canvas>
 <div id="res"></div></section>
 
@@ -43,10 +50,18 @@ canvas{max-width:100%;border-radius:8px}table{width:100%;border-collapse:collaps
 <button class="a" style="background:#c33;color:#fff" onclick="wipe()">Delete all my data</button></section>
 
 <section id="photos"><h3>Progress photos</h3>
-<p class="mut">Same pose, distance and lighting each time. Visual comparison only — no body-fat estimates.</p>
-<input type="file" id="pf" accept="image/*"><button class="a" onclick="upPhoto()">Upload</button>
-<div id="cmp" class="ph"></div><input type="range" id="sl" min="0" max="100" value="50" style="width:100%">
-<div id="slw" style="position:relative;display:none"><img id="i1" style="width:100%"><img id="i2" style="position:absolute;left:0;top:0;width:100%;clip-path:inset(0 50% 0 0)"></div></section>
+<p class="mut">Same pose, distance and lighting each time. Visual comparison only — no body-fat estimates. Photos are sent to the AI model only when you click Analyze.</p>
+<div class="two">
+<div class="slot bf"><h4>BEFORE</h4><div id="slotB" class="prev"></div><input type="file" id="pfb" accept="image/jpeg,image/png,image/webp"><label class="mut">Date taken <input type="date" id="pdb"></label><button class="a" onclick="upPhoto('b')">Upload Before</button></div>
+<div class="slot af"><h4>AFTER</h4><div id="slotA" class="prev"></div><input type="file" id="pfa" accept="image/jpeg,image/png,image/webp"><label class="mut">Date taken <input type="date" id="pda"></label><button class="a" onclick="upPhoto('a')">Upload After</button></div>
+</div>
+<h4>Timeline</h4><p class="mut">All photos by date. Tap Before or After on any photo to choose the two to compare.</p>
+<div id="tl" class="tl"></div>
+<div id="cmpw" style="display:none"><h4>Compare</h4><p id="gap" class="mut"></p>
+<div class="lbl"><span style="color:#e8a33d">BEFORE</span><span style="color:var(--ac)">AFTER</span></div>
+<div style="position:relative"><img id="i1" style="width:100%;display:block"><img id="i2" style="position:absolute;left:0;top:0;width:100%;clip-path:inset(0 50% 0 0)"></div>
+<input type="range" id="sl" min="0" max="100" value="50" style="width:100%">
+<button class="a" onclick="analyzePhotos()">Analyze progress with AI</button><p id="pa" style="white-space:pre-wrap"></p></div></section>
 </main>
 <script type="module">
 const $=id=>document.getElementById(id), api=(p,o)=>fetch('/api/'+p,o).then(r=>r.json());
@@ -78,10 +93,22 @@ async function dash(){const d=await api('dashboard');ch.forEach(c=>c.destroy());
  $('kpi').innerHTML=`Weekly volume: <b>${d.weekly_volume} kg</b> · PRs: ${d.prs.map(p=>p.exercise+' '+p.weight).join(', ')||'—'}${d.bmi?` · BMI ${d.bmi}`:''}${d.plateau?' · <b style="color:orange">Weight plateau detected</b>':''}`;
  const mk=(id,l,rows,k)=>new Chart($(id),{type:'line',data:{labels:rows.map(r=>r.date),datasets:[{label:l,data:rows.map(r=>r[k]),borderColor:'#76b900'}]}});
  ch=[mk('c1','Body weight (kg)',d.weight,'weight'),mk('c2','Form score',d.form,'score')]}
-async function photos(){const p=await api('photos');$('cmp').innerHTML=p.map(x=>`<img src="${x.path}" title="${x.date}">`).join('');
- if(p.length>1){$('slw').style.display='block';$('i1').src=p[0].path;$('i2').src=p[p.length-1].path}}
+let P=[],selB=null,selA=null;
+async function photos(){P=await api('photos');P.sort((x,y)=>x.date.localeCompare(y.date)||x.id-y.id);
+ if(!P.find(x=>x.id===selB))selB=P.length>1?P[0].id:null;if(!P.find(x=>x.id===selA))selA=P.length>1?P[P.length-1].id:null;
+ const t=new Date().toISOString().slice(0,10);if(!$('pdb').value)$('pdb').value=t;if(!$('pda').value)$('pda').value=t;renderPhotos()}
+function slot(id){const p=P.find(x=>x.id===id);return p?`<img src="${p.path}"><div class="mut">${p.date}</div>`:'<div class="mut">Nothing selected yet</div>'}
+function renderPhotos(){$('slotB').innerHTML=slot(selB);$('slotA').innerHTML=slot(selA);
+ $('tl').innerHTML=P.length?P.map(p=>`<div class="tp${p.id===selB?' b':''}${p.id===selA?' a':''}"><img src="${p.path}"><div>${p.date}</div><button class="a" onclick="pick(${p.id},'b')">Before</button><button class="a" onclick="pick(${p.id},'a')">After</button><a href="#" class="mut" onclick="delPhoto(${p.id});return false">delete</a></div>`).join(''):'<p class="mut">No photos yet. Upload your Before and After above.</p>';
+ const pb=P.find(x=>x.id===selB),pa=P.find(x=>x.id===selA),ok=pb&&pa&&pb.id!==pa.id;$('cmpw').style.display=ok?'block':'none';
+ if(ok){$('i1').src=pa.path;$('i2').src=pb.path;$('gap').textContent=`${pb.date} → ${pa.date} (${Math.round((new Date(pa.date)-new Date(pb.date))/864e5)} days)`}}
+window.pick=(id,w)=>{if(w==='b')selB=id;else selA=id;renderPhotos()};
+window.delPhoto=async id=>{await api('photos/'+id,{method:'DELETE'});photos()};
+window.upPhoto=async w=>{const f=$('pf'+w).files[0];if(!f)return alert('Choose a photo first');const fd=new FormData();fd.append('file',f);fd.append('taken',$('pd'+w).value);
+ const r=await api('photos',{method:'POST',body:fd});if(r.detail)return alert(r.detail);$('pf'+w).value='';if(r.id){if(w==='b')selB=r.id;else selA=r.id}photos()};
 $('sl').oninput=e=>$('i2').style.clipPath=`inset(0 ${100-e.target.value}% 0 0)`;
-window.upPhoto=async()=>{const f=$('pf').files[0];if(!f)return;const fd=new FormData();fd.append('file',f);await api('photos',{method:'POST',body:fd});photos()};
+window.analyzePhotos=async()=>{if(!selB||!selA||selB===selA){alert('Pick a Before and a different After photo');return}
+ $('pa').textContent='Analyzing…';const r=await api('photos/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({before_id:selB,after_id:selA})});$('pa').textContent=r.caption||r.detail||'No result'};
 import {PoseLandmarker,FilesetResolver} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/+esm";
 let lm,running=false,reps=[],st={phase:'up',minKnee:180,maxDepth:-1,maxLean:0,t0:0};
 const v=$('v'),cv=$('cv'),cx=cv.getContext('2d');
@@ -100,7 +127,9 @@ function frame(p,now){
 function loop(){if(!running)return;if(v.readyState>=2){cx.drawImage(v,0,0,cv.width,cv.height);const r=lm.detectForVideo(v,performance.now());if(r.landmarks[0])frame(r.landmarks[0],v.currentTime*1000)}requestAnimationFrame(loop)}
 async function begin(){if(!lm)await init();reps=[];st={phase:'up',minKnee:180,maxDepth:-1,maxLean:0,t0:0};$('rc').textContent=0;$('res').innerHTML='';running=true;await v.play();loop()}
 $('cam').onclick=async()=>{v.srcObject=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480}});begin()};
-$('vf').onchange=e=>{v.srcObject=null;v.src=URL.createObjectURL(e.target.files[0]);v.onloadeddata=begin;v.onended=()=>$('stop').click()};
+$('vf').onchange=e=>{const f=e.target.files[0];if(!f)return;$('vmsg').textContent='Loading '+f.name+'…';v.srcObject=null;
+ v.onerror=()=>{running=false;$('vmsg').textContent="This browser can't play that video (iPhone .mov files often use HEVC). Convert it to MP4 (H.264) and try again."};
+ v.src=URL.createObjectURL(f);v.onloadeddata=()=>{$('vmsg').textContent=f.name;begin()};v.onended=()=>$('stop').click();e.target.value=''};
 $('stop').onclick=async()=>{running=false;v.pause();v.srcObject?.getTracks().forEach(t=>t.stop());if(!reps.length){$('res').textContent='No complete reps detected — check side view and lighting.';return}
  $('res').textContent='Analyzing…';const r=await api('form',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({exercise:'squat',reps})});
  $('res').innerHTML=`<h4>Form score ${r.score}/100 · ${r.rep_count} reps</h4><p>${r.summary}</p>`};
