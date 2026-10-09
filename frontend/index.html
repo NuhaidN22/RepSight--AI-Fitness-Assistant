@@ -16,7 +16,7 @@ canvas{max-width:100%;border-radius:8px}table{width:100%;border-collapse:collaps
 .ph{display:flex;gap:8px;flex-wrap:wrap}.ph img{width:48%;border-radius:8px}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}.slot{border:2px solid;border-radius:10px;padding:10px}.slot h4{margin:0 0 8px}
 .bf{border-color:#e8a33d}.bf h4{color:#e8a33d}.af{border-color:var(--ac)}.af h4{color:var(--ac)}
-.slot input[type=file]{width:100%}.prev{min-height:40px;margin-bottom:6px}.prev img{width:100%;height:220px;object-fit:cover;border-radius:8px}
+.slot input[type=file]{width:100%}.prev{min-height:40px;margin-bottom:6px}.prev img{width:100%;height:170px;object-fit:cover;border-radius:8px}
 .tl{display:flex;gap:10px;overflow-x:auto;padding-bottom:6px}.tp{min-width:130px;font-size:12px;border:2px solid transparent;border-radius:8px;padding:4px}
 .tp img{width:120px;height:150px;object-fit:cover;border-radius:6px}.tp.b{border-color:#e8a33d}.tp.a{border-color:var(--ac)}.tp button.a{padding:3px 6px;margin:2px;font-size:11px}
 .lbl{display:flex;justify-content:space-between;font-weight:700;margin:4px 0}
@@ -55,13 +55,15 @@ canvas{max-width:100%;border-radius:8px}table{width:100%;border-collapse:collaps
 <div class="slot bf"><h4>BEFORE</h4><div id="slotB" class="prev"></div><input type="file" id="pfb" accept="image/jpeg,image/png,image/webp"><label class="mut">Date taken <input type="date" id="pdb"></label><button class="a" onclick="upPhoto('b')">Upload Before</button></div>
 <div class="slot af"><h4>AFTER</h4><div id="slotA" class="prev"></div><input type="file" id="pfa" accept="image/jpeg,image/png,image/webp"><label class="mut">Date taken <input type="date" id="pda"></label><button class="a" onclick="upPhoto('a')">Upload After</button></div>
 </div>
-<h4>Timeline</h4><p class="mut">All photos by date. Tap Before or After on any photo to choose the two to compare.</p>
+<details id="tlw" style="margin-top:14px"><summary style="cursor:pointer;font-weight:600">Saved photos (<span id="tlc">0</span>) — timeline</summary>
+<p class="mut">Sorted by date. Tap Before or After on a photo to pick the two to compare.</p>
 <div id="tl" class="tl"></div>
-<div id="cmpw" style="display:none"><h4>Compare</h4><p id="gap" class="mut"></p>
+<button class="a" style="background:#c33;color:#fff" onclick="clearAll()">Clear all photos</button></details>
+<div id="cmpw" style="display:none;max-width:460px;margin:14px auto 0"><h4>Compare</h4><p id="gap" class="mut"></p>
 <div class="lbl"><span style="color:#e8a33d">BEFORE</span><span style="color:var(--ac)">AFTER</span></div>
 <div style="position:relative"><img id="i1" style="width:100%;display:block"><img id="i2" style="position:absolute;left:0;top:0;width:100%;clip-path:inset(0 50% 0 0)"></div>
 <input type="range" id="sl" min="0" max="100" value="50" style="width:100%">
-<button class="a" onclick="analyzePhotos()">Analyze progress with AI</button><p id="pa" style="white-space:pre-wrap"></p></div></section>
+<button class="a" onclick="analyzePhotos()">Analyze progress with AI</button><button class="a" style="background:#2c3040;color:#e8eaf0" onclick="resetSel()">Start over</button><p id="pa" style="white-space:pre-wrap"></p></div></section>
 </main>
 <script type="module">
 const $=id=>document.getElementById(id), api=(p,o)=>fetch('/api/'+p,o).then(r=>r.json());
@@ -95,13 +97,15 @@ async function dash(){const d=await api('dashboard');ch.forEach(c=>c.destroy());
  ch=[mk('c1','Body weight (kg)',d.weight,'weight'),mk('c2','Form score',d.form,'score')]}
 let P=[],selB=null,selA=null;
 async function photos(){P=await api('photos');P.sort((x,y)=>x.date.localeCompare(y.date)||x.id-y.id);
- if(!P.find(x=>x.id===selB))selB=P.length>1?P[0].id:null;if(!P.find(x=>x.id===selA))selA=P.length>1?P[P.length-1].id:null;
+ if(!P.find(x=>x.id===selB))selB=null;if(!P.find(x=>x.id===selA))selA=null;
  const t=new Date().toISOString().slice(0,10);if(!$('pdb').value)$('pdb').value=t;if(!$('pda').value)$('pda').value=t;renderPhotos()}
-function slot(id){const p=P.find(x=>x.id===id);return p?`<img src="${p.path}"><div class="mut">${p.date}</div>`:'<div class="mut">Nothing selected yet</div>'}
-function renderPhotos(){$('slotB').innerHTML=slot(selB);$('slotA').innerHTML=slot(selA);
+function slot(id){const p=P.find(x=>x.id===id);return p?`<img src="${p.path}"><div class="mut">${p.date}</div>`:'<div class="mut" style="padding:14px 0">No photo selected</div>'}
+function renderPhotos(){$('tlc').textContent=P.length;$('slotB').innerHTML=slot(selB);$('slotA').innerHTML=slot(selA);
  $('tl').innerHTML=P.length?P.map(p=>`<div class="tp${p.id===selB?' b':''}${p.id===selA?' a':''}"><img src="${p.path}"><div>${p.date}</div><button class="a" onclick="pick(${p.id},'b')">Before</button><button class="a" onclick="pick(${p.id},'a')">After</button><a href="#" class="mut" onclick="delPhoto(${p.id});return false">delete</a></div>`).join(''):'<p class="mut">No photos yet. Upload your Before and After above.</p>';
  const pb=P.find(x=>x.id===selB),pa=P.find(x=>x.id===selA),ok=pb&&pa&&pb.id!==pa.id;$('cmpw').style.display=ok?'block':'none';
  if(ok){$('i1').src=pa.path;$('i2').src=pb.path;$('gap').textContent=`${pb.date} → ${pa.date} (${Math.round((new Date(pa.date)-new Date(pb.date))/864e5)} days)`}}
+window.resetSel=()=>{selB=selA=null;$('pa').textContent='';renderPhotos()};
+window.clearAll=async()=>{if(!confirm('Delete ALL progress photos?'))return;await api('photos',{method:'DELETE'});selB=selA=null;$('pa').textContent='';photos()};
 window.pick=(id,w)=>{if(w==='b')selB=id;else selA=id;renderPhotos()};
 window.delPhoto=async id=>{await api('photos/'+id,{method:'DELETE'});photos()};
 window.upPhoto=async w=>{const f=$('pf'+w).files[0];if(!f)return alert('Choose a photo first');const fd=new FormData();fd.append('file',f);fd.append('taken',$('pd'+w).value);

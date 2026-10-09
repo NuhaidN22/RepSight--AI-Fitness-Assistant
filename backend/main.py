@@ -107,6 +107,14 @@ def analyze_photos(a: AnalyzeIn):
     c.execute("UPDATE progress_photo SET caption=? WHERE id=?", (text, f["id"])); c.commit(); c.close()
     return {"caption": text}
 
+@app.delete("/api/photos")
+def clear_photos():
+    c = db.conn(); c.execute("DELETE FROM progress_photo"); c.commit(); c.close()
+    for f in os.listdir(UP):
+        try: os.remove(os.path.join(UP, f))
+        except OSError: pass
+    return {"ok": True}
+
 @app.delete("/api/photos/{pid}")
 def del_photo(pid: int):
     c = db.conn(); r = c.execute("SELECT path FROM progress_photo WHERE id=?", (pid,)).fetchone()

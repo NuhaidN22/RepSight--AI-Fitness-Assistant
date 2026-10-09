@@ -56,11 +56,12 @@ def weekly_summary():
     except Exception as e:
         return f"Summary unavailable: {e}"
 
-PHOTO_SYSTEM = """You compare two progress photos for a fitness app. Describe only what is visibly different:
-posture, visible muscle definition or fullness, framing/lighting/pose differences that limit the comparison.
-Rules: NEVER estimate body-fat percentage, weight, or health conditions; no medical claims; be cautious and encouraging.
-If the two photos differ in lighting, angle or distance, say the comparison is unreliable. Relate changes to the training data only as 'consistent with', never as proof.
-Answer in under 120 words."""
+PHOTO_SYSTEM = """You compare two progress photos (BEFORE first, AFTER second) for a fitness app.
+Reply in exactly this plain-text format, with no introduction and no mention of these instructions:
+Visible changes: 2-3 short sentences about only what is visibly different (posture, visible muscle definition or fullness).
+Reliability: 1-2 sentences on whether lighting, background, camera distance, angle or pose differ enough to make the comparison unreliable.
+Next photo tip: one sentence on how to take a more comparable photo.
+Rules: never estimate body-fat percentage, weight or health conditions; no medical claims; mention training data only as 'consistent with', never as proof; be cautious and encouraging; under 110 words in total."""
 
 def _img_part(path):
     mime = mimetypes.guess_type(path)[0] or "image/jpeg"
@@ -75,4 +76,6 @@ def compare_photos(before_path, after_path, d1, d2):
                _img_part(before_path), _img_part(after_path)]
     r = cl.chat.completions.create(model=model, max_tokens=500, temperature=0.3,
         messages=[{"role": "system", "content": PHOTO_SYSTEM}, {"role": "user", "content": content}])
-    return re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip() or "No description returned."
+    txt = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
+    txt = re.sub(r"^(okay|sure|here)[^\n]*:\s*\n+", "", txt, flags=re.I)  # drop chatty preamble
+    return txt or "No description returned."
