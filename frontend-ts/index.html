@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#f7eff1" />
+    <title>AI Fitness Coach</title>
+    <script>
+      // Set the theme before first paint so there is no white/black flash.
+      (function () {
+        var t = null;
+        try { t = localStorage.getItem('theme'); } catch (e) {}
+        if (t !== 'light' && t !== 'dark') {
+          t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+        document.documentElement.setAttribute('data-theme', t);
+      })();
+    </script>
+  </head>
+  <body>
+    <header>
+      <div class="brand">AI Fitness <span>Coach</span> <small>· Nebius + NVIDIA Nemotron</small></div>
+      <button id="theme" class="theme-btn" type="button" aria-label="Switch theme"></button>
+    </header>
+    <nav id="nav" aria-label="Sections"></nav>
+    <main>
+      <section id="log"></section>
+      <section id="form"><p class="mut">Form Check is not migrated to TypeScript yet.</p></section>
+      <section id="coach"><p class="mut">Coach is not migrated to TypeScript yet.</p></section>
+      <section id="dash"><p class="mut">Dashboard is not migrated to TypeScript yet.</p></section>
+      <section id="photos"><p class="mut">Photos is not migrated to TypeScript yet.</p></section>
+    </main>
+    <div id="toasts" aria-live="polite"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
