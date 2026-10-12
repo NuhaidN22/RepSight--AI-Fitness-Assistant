@@ -1,4 +1,4 @@
-import type { Exercise, NewRoutine, NewSet, Routine, WorkoutSet } from './types';
+import type { Exercise, FormResult, NewRoutine, NewSet, RepMetrics, Routine, WorkoutSet } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -46,4 +46,6 @@ export const api = {
   routines: () => request<Routine[]>('routines'),
   addRoutine: (routine: NewRoutine) => request<unknown>('routines', jsonInit('POST', routine)),
   deleteRoutine: (id: number) => request<unknown>(`routines/${id}`, jsonInit('DELETE')),
+  analyzeForm: (exercise: string, reps: RepMetrics[]) =>
+    request<FormResult>('form', jsonInit('POST', { exercise, reps })),
 };

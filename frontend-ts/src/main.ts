@@ -1,4 +1,5 @@
 import './style.css';
+import { initForm, stopForm } from './form';
 import { initLog, refreshLog } from './log';
 import { initTheme } from './theme';
 import { $ } from './ui';
@@ -19,6 +20,7 @@ nav.innerHTML = TABS.map((t) => `<button type="button" data-t="${t.id}">${t.labe
 function show(id: TabId): void {
   for (const t of TABS) $(t.id).classList.toggle('on', t.id === id);
   nav.querySelectorAll<HTMLButtonElement>('button').forEach((b) => b.classList.toggle('on', b.dataset.t === id));
+  if (id !== 'form') stopForm();
   if (id === 'log') void refreshLog();
 }
 
@@ -31,4 +33,5 @@ nav.addEventListener('click', (ev) => {
 
 initTheme($<HTMLButtonElement>('theme'));
 initLog();
+initForm();
 show('log');
