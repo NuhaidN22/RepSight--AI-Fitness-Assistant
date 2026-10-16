@@ -46,3 +46,36 @@ export interface FormResult {
   rep_count: number;
   summary: string;
 }
+
+export interface PrEntry {
+  exercise: string;
+  weight: number;
+}
+
+export interface DashboardData {
+  weekly_volume: number;
+  prs: PrEntry[];
+  bmi?: number | null;
+  plateau?: boolean;
+  weight: { date: string; weight: number }[];
+  form: { date: string; score: number }[];
+}
+
+export interface SummaryResult {
+  summary: string;
+}
+
+export interface Photo {
+  id: number;
+  date: string;
+  path: string;
+}
+
+export interface PhotoUploadResult {
+  id?: number;
+}
+
+export interface PhotoAnalysis {
+  caption?: string;
+  detail?: string;
+}
