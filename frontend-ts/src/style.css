@@ -34,19 +34,24 @@
 *{box-sizing:border-box}
 body{margin:0;font:15px/1.5 Inter,system-ui,sans-serif;background:var(--page-bg);background-attachment:fixed;color:var(--fg);min-height:100vh;transition:background-color .25s,color .25s}
 
-header{max-width:1000px;margin:auto;padding:22px 18px 6px;display:flex;align-items:center;justify-content:space-between;gap:12px}
-.brand{font-size:20px;font-weight:700;letter-spacing:-.02em}
+.app{display:grid;grid-template-columns:248px minmax(0,1fr);min-height:100vh}
+.sidebar{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:22px;padding:26px 14px 20px;border-right:1px solid var(--line);background:var(--nav-bg);backdrop-filter:blur(12px)}
+.brand{font-size:22px;font-weight:700;letter-spacing:-.02em;padding:0 8px}
 .brand span{color:var(--ac)}
-.brand small{color:var(--mut);font-weight:500;font-size:13px}
+.brand small{display:block;color:var(--mut);font-weight:500;font-size:12px;letter-spacing:0;margin-top:2px}
 .theme-btn{width:42px;height:42px;display:grid;place-items:center;border-radius:50%;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer;box-shadow:var(--shadow);transition:transform .15s,border-color .15s}
 .theme-btn:hover{border-color:var(--ac);color:var(--ac);transform:rotate(12deg)}
+.sidebar .theme-btn{margin:auto 8px 0}
 
-nav{position:sticky;top:0;z-index:5;display:flex;gap:6px;max-width:1000px;margin:auto;padding:10px 14px;overflow-x:auto;backdrop-filter:blur(12px);background:var(--nav-bg)}
-nav button{flex:none;background:transparent;color:var(--mut);border:1px solid transparent;padding:8px 16px;border-radius:999px;cursor:pointer;font:inherit;font-weight:500;transition:.15s}
+nav{display:flex;flex-direction:column;gap:4px}
+nav button{display:flex;flex-direction:column;align-items:flex-start;gap:1px;width:100%;text-align:left;background:transparent;color:var(--mut);border:1px solid transparent;padding:10px 14px;border-radius:12px;cursor:pointer;font:inherit;transition:.15s}
+nav button b{font-weight:600;font-size:15px}
+nav button small{font-size:12px;opacity:.8}
 nav button:hover{color:var(--fg);background:var(--card)}
-nav button.on{color:var(--on-ac);background:linear-gradient(135deg,var(--ac),var(--ac2));font-weight:600;box-shadow:0 6px 16px var(--ac-glow)}
+nav button.on{color:var(--on-ac);background:linear-gradient(135deg,var(--ac),var(--ac2));box-shadow:0 6px 16px var(--ac-glow)}
 
-main{max-width:1000px;margin:auto;padding:10px 14px 60px}
+.content{min-width:0}
+main{max-width:1000px;margin:auto;padding:26px 22px 60px}
 section{display:none}
 section.on{display:block;animation:fade .25s ease-out}
 section>p.mut{background:var(--card);padding:22px;border-radius:var(--r);border:1px solid var(--line);box-shadow:var(--shadow)}
@@ -160,7 +165,14 @@ button.link:hover{color:var(--err)}
 @media (max-width:760px){
   .log-grid{grid-template-columns:1fr}
   .page-head h2{font-size:22px}
-  .brand small{display:none}
+  .app{grid-template-columns:1fr}
+  .sidebar{position:static;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;gap:10px;padding:12px 14px;border-right:0;border-bottom:1px solid var(--line)}
+  .sidebar .brand{flex:1 1 auto}
+  .sidebar .theme-btn{margin:0;order:2}
+  nav{order:3;flex:1 0 100%;flex-direction:row;overflow-x:auto}
+  nav button{width:auto;flex:none;padding:8px 14px;border-radius:999px}
+  nav button small{display:none}
+  main{padding:14px 14px 60px}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 
@@ -417,4 +429,53 @@ dialog.modal .btn-primary{width:auto;padding:10px 18px;font-size:15px}
   .slots{grid-template-columns:1fr}
   .coach-card{height:78vh}
   .msg{max-width:94%}
+}
+
+/* ---------- Tab intro cards (Kinetiq, Sinew) ---------- */
+.intro{margin:0 0 16px;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--ac);border-radius:14px;box-shadow:var(--shadow)}
+.intro summary{cursor:pointer;list-style:none;padding:14px 18px;font-weight:600;display:flex;justify-content:space-between;gap:12px}
+.intro summary::-webkit-details-marker{display:none}
+.intro summary::after{content:'Hide';color:var(--mut);font-weight:500;font-size:13px}
+.intro:not([open]) summary::after{content:'What is this?'}
+.intro-body{padding:0 18px 16px;display:grid;gap:10px;color:var(--mut)}
+.intro-body p{margin:0}
+.intro-body ol,.intro-body ul{margin:0;padding-left:20px;display:grid;gap:4px}
+.intro-body b{color:var(--fg)}
+
+/* ---------- Collapsible sidebar ---------- */
+.side-top{display:flex;align-items:flex-start;justify-content:space-between;gap:6px}
+.brand-mini{display:none}
+.collapse-btn{flex:none;width:32px;height:32px;display:grid;place-items:center;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--mut);cursor:pointer;transition:.15s}
+.collapse-btn:hover{color:var(--ac);border-color:var(--ac)}
+.collapse-btn svg{transition:transform .2s}
+nav button{flex-direction:row;align-items:center;gap:12px}
+nav button .ni{flex:none;width:20px;height:20px}
+nav button .nt{display:flex;flex-direction:column;align-items:flex-start;gap:1px;min-width:0;white-space:nowrap}
+.sidebar{transition:width .2s ease,box-shadow .2s;overflow:hidden;width:248px}
+.app{transition:grid-template-columns .2s ease}
+
+/* Minimized: narrow icon rail. Hover or keyboard focus slides it open over the page (no layout jump). */
+.app.collapsed{grid-template-columns:68px minmax(0,1fr)}
+.app.collapsed .sidebar{width:68px;position:sticky;z-index:30}
+.app.collapsed .collapse-btn svg{transform:rotate(180deg)}
+.app.collapsed .brand-full,.app.collapsed .nt{display:none}
+.app.collapsed .brand-mini{display:block;font-size:20px;font-weight:700;letter-spacing:-.02em}
+.app.collapsed .brand-mini span{color:var(--ac)}
+.app.collapsed .side-top{flex-direction:column;align-items:center}
+.app.collapsed nav button{justify-content:center;padding:12px 0}
+.app.collapsed .sidebar .theme-btn{margin:auto auto 0}
+.app.collapsed .sidebar:hover,.app.collapsed .sidebar:focus-within{width:248px;box-shadow:12px 0 40px rgb(0 0 0 / .45);background:var(--card)}
+.app.collapsed .sidebar:hover .brand-full,.app.collapsed .sidebar:focus-within .brand-full{display:block}
+.app.collapsed .sidebar:hover .brand-mini,.app.collapsed .sidebar:focus-within .brand-mini{display:none}
+.app.collapsed .sidebar:hover .nt,.app.collapsed .sidebar:focus-within .nt{display:flex}
+.app.collapsed .sidebar:hover .side-top,.app.collapsed .sidebar:focus-within .side-top{flex-direction:row;align-items:flex-start}
+.app.collapsed .sidebar:hover nav button,.app.collapsed .sidebar:focus-within nav button{justify-content:flex-start;padding:10px 14px}
+.app.collapsed .sidebar:hover .theme-btn,.app.collapsed .sidebar:focus-within .theme-btn{margin:auto 8px 0}
+@media (max-width:760px){
+  .sidebar{width:auto;overflow:visible}
+  .collapse-btn{display:none}
+  .app.collapsed{grid-template-columns:1fr}
+  .app.collapsed .sidebar,.app.collapsed .sidebar:hover{width:auto}
+  .app.collapsed .brand-full,.app.collapsed .nt{display:block}
+  .app.collapsed .brand-mini{display:none}
 }

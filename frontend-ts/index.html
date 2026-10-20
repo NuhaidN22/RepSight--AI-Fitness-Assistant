@@ -18,18 +18,25 @@
     </script>
   </head>
   <body>
-    <header>
-      <div class="brand">Rep<span>Sight</span> <small>· Axon (NVIDIA Nemotron) on Nebius</small></div>
-      <button id="theme" class="theme-btn" type="button" aria-label="Switch theme"></button>
-    </header>
-    <nav id="nav" aria-label="Sections"></nav>
-    <main>
-      <section id="log"></section>
-      <section id="form"></section>
-      <section id="coach"></section>
-      <section id="dash"></section>
-      <section id="photos"></section>
-    </main>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="side-top">
+          <div class="brand"><span class="brand-full">Rep<span>Sight</span><small>Axon (NVIDIA Nemotron) on Nebius</small></span><span class="brand-mini">R<span>S</span></span></div>
+          <button id="collapse" class="collapse-btn" type="button" aria-label="Collapse sidebar" aria-pressed="false" title="Collapse sidebar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button>
+        </div>
+        <nav id="nav" aria-label="Sections"></nav>
+        <button id="theme" class="theme-btn" type="button" aria-label="Switch theme"></button>
+      </aside>
+      <div class="content">
+        <main>
+          <section id="log"></section>
+          <section id="form"></section>
+          <section id="coach"></section>
+          <section id="dash"></section>
+          <section id="photos"></section>
+        </main>
+      </div>
+    </div>
     <div id="toasts" aria-live="polite"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

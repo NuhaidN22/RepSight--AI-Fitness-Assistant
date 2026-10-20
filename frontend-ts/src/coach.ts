@@ -20,6 +20,18 @@ const EMPTY_HTML = `
   </div>`;
 
 const TEMPLATE = `
+  <details class="intro" open>
+    <summary>Sinew: your AI strength coach</summary>
+    <div class="intro-body">
+      <p>Sinew is powered by Axon (NVIDIA Nemotron on Nebius). It answers using <b>your own data</b>: logged sets, body weight, and your latest Kinetiq form results.</p>
+      <ul>
+        <li>Ask why a lift is stalling, what to train next, or how your week went.</li>
+        <li>It cites your numbers and dates, and says so when your logs are missing.</li>
+        <li>Coaching suggestions only: no medical advice, no body-fat estimates.</li>
+      </ul>
+    </div>
+  </details>
+
   <div class="page-head">
     <h2>Sinew</h2>
     <p class="mut">Ask about your training, form and progress. Answers are based on the data you have logged.</p>

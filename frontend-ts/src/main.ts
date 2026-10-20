@@ -9,16 +9,42 @@ import { $ } from './ui';
 
 type TabId = 'log' | 'form' | 'coach' | 'dash' | 'photos';
 
-const TABS: ReadonlyArray<{ id: TabId; label: string }> = [
-  { id: 'log', label: 'Log' },
-  { id: 'form', label: 'Kinetiq' },
-  { id: 'coach', label: 'Sinew' },
-  { id: 'dash', label: 'Dashboard' },
-  { id: 'photos', label: 'Photos' },
+const TABS: ReadonlyArray<{ id: TabId; label: string; hint: string; icon: string }> = [
+  { id: 'log', label: 'Log', hint: 'Sets, routines, body weight', icon: '<path d="M4 6h16M4 12h16M4 18h10"/>' },
+  { id: 'form', label: 'Kinetiq', hint: 'Camera form check', icon: '<circle cx="12" cy="5" r="2.5"/><path d="M12 8v7m0 0-3 6m3-6 3 6M7 11l5-3 5 3"/>' },
+  { id: 'coach', label: 'Sinew', hint: 'AI coach chat', icon: '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>' },
+  { id: 'dash', label: 'Dashboard', hint: 'Progress at a glance', icon: '<path d="M4 20V10m6 10V4m6 16v-7m4 7H2"/>' },
+  { id: 'photos', label: 'Photos', hint: 'Before and after', icon: '<path d="M3 8h4l2-3h6l2 3h4v11H3z"/><circle cx="12" cy="13" r="3.5"/>' },
 ];
+const svg = (paths: string): string =>
+  `<svg class="ni" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 
 const nav = $('nav');
-nav.innerHTML = TABS.map((t) => `<button type="button" data-t="${t.id}">${t.label}</button>`).join('');
+
+/* Sidebar: minimize it to an icon rail; it opens again while the pointer (or keyboard focus) is on it. */
+const app = document.querySelector<HTMLElement>('.app');
+const collapseBtn = $<HTMLButtonElement>('collapse');
+function setCollapsed(on: boolean): void {
+  app?.classList.toggle('collapsed', on);
+  collapseBtn.setAttribute('aria-pressed', String(on));
+  const label = on ? 'Pin sidebar open' : 'Minimize sidebar';
+  collapseBtn.setAttribute('aria-label', label);
+  collapseBtn.title = label;
+  try {
+    localStorage.setItem('sidebar', on ? 'min' : 'open');
+  } catch {
+    /* private mode: the choice just will not be remembered */
+  }
+}
+collapseBtn.addEventListener('click', () => setCollapsed(!app?.classList.contains('collapsed')));
+let startMin = false;
+try {
+  startMin = localStorage.getItem('sidebar') === 'min';
+} catch {
+  /* ignore */
+}
+setCollapsed(startMin);
+nav.innerHTML = TABS.map((t) => `<button type="button" data-t="${t.id}" title="${t.label}">${svg(t.icon)}<span class="nt"><b>${t.label}</b><small>${t.hint}</small></span></button>`).join('');
 
 function show(id: TabId): void {
   for (const t of TABS) $(t.id).classList.toggle('on', t.id === id);

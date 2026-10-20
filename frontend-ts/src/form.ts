@@ -70,6 +70,19 @@ const GUIDE =
 const EMPTY_BARS = '<span class="mut">Each rep appears here as a bar</span>';
 
 const TEMPLATE = `
+  <details class="intro" open>
+    <summary>Kinetiq: your on-device form coach</summary>
+    <div class="intro-body">
+      <p>Kinetiq watches a set through your camera or an uploaded video, counts your reps and tells you what to fix.</p>
+      <ol>
+        <li><b>Choose the exercise</b> from the list, or leave it on Auto-detect.</li>
+        <li><b>Film or upload</b> a set with your whole body in frame, side-on if you can.</li>
+        <li><b>Tap Finish &amp; analyze.</b> You get a form score, per-rep flags (range of motion, lean, elbow drift) and a short summary from Axon.</li>
+      </ol>
+      <p>Pose tracking runs in your browser. On Auto, three still frames are sent to a vision model to name the exercise; pick an exercise yourself to send nothing. Several people in frame? Tap the one to follow.</p>
+    </div>
+  </details>
+
   <div class="page-head">
     <h2>Kinetiq</h2>
     <p class="mut">Pick your exercise (or leave it on Auto) and film with your whole body in frame, side-on if you can. Pose tracking runs on your device. On Auto, three still frames are sent to a vision model to name the exercise; pick an exercise yourself to send nothing.</p>
