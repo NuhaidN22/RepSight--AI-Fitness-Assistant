@@ -35,12 +35,14 @@ def stream_reply(history):
 
 def summarize_form(exercise, agg):
     cl = client()
-    fallback = f"{agg['rep_count']} reps; depth hit on {agg['depth_pct']}% and torso OK on {agg['torso_pct']}% of reps."
+    flags = agg.get("flags") or {}
+    issues = " Issues: " + ", ".join(f"{k} (x{v})" for k, v in flags.items()) + "." if flags else " No form issues detected."
+    fallback = f"{exercise}: {agg['rep_count']} reps; target range reached on {agg['depth_pct']}% and posture OK on {agg['torso_pct']}% of reps." + issues
     if not cl: return fallback
     try:
         r = cl.chat.completions.create(model=SUMMARY_MODEL, max_tokens=200, temperature=0.3, messages=[
-            {"role": "system", "content": "You are a lifting coach. From the metrics JSON, write a 2-3 sentence plain-language form summary with one fix. Not medical advice."},
-            {"role": "user", "content": json.dumps({"exercise": exercise, **agg})}])
+            {"role": "system", "content": f"You are a strength coach. The exercise is: {exercise}. depth_pct = % of reps reaching the target range of motion, torso_pct = % of reps with good posture, flags = form issues found with counts. Write 2-3 plain sentences about THIS exercise only: what went well, the main issue, and one concrete fix. Never mention squats unless the exercise is a squat. Not medical advice."},
+            {"role": "user", "content": json.dumps(agg)}])
         return r.choices[0].message.content.strip()
     except Exception:
         return fallback
@@ -79,3 +81,23 @@ def compare_photos(before_path, after_path, d1, d2):
     txt = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
     txt = re.sub(r"^(okay|sure|here)[^\n]*:\s*\n+", "", txt, flags=re.I)  # drop chatty preamble
     return txt or "No description returned."
+
+EXERCISE_KEYS = {"squat": "Squat / lunge / leg press", "hinge": "Deadlift / RDL / hip hinge", "pushup": "Push-up / dip",
+                 "chestpress": "Chest press / bench press / pec fly", "curl": "Biceps curl", "raise": "Lateral or front dumbbell raise",
+                 "press": "Overhead / shoulder press", "other": "Anything else (rows, shrugs, curls on a machine, ...)"}
+
+def identify_exercise(frames):
+    """Ask the vision model which exercise is shown in a few frames from one set. Returns (key, raw_text)."""
+    cl = client(); model = os.getenv("VISION_MODEL")
+    if not cl or not model: raise RuntimeError("VISION_MODEL / NEBIUS_API_KEY not set")
+    options = "\n".join(f"{k}: {v}" for k, v in EXERCISE_KEYS.items())
+    prompt = ("These frames come from ONE set of a gym exercise, in time order. Pick the exercise being performed by the "
+              "main person (the one holding the weight or using the machine; ignore people in the background)."
+              "\nOptions:\n" + options + "\nReply with ONLY the option key, one word.")
+    content = [{"type": "text", "text": prompt}]
+    for f in frames:
+        content.append({"type": "image_url", "image_url": {"url": f if f.startswith("data:") else "data:image/jpeg;base64," + f}})
+    r = cl.chat.completions.create(model=model, max_tokens=20, temperature=0, messages=[{"role": "user", "content": content}])
+    txt = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip().lower()
+    key = next((k for k in EXERCISE_KEYS if re.search(rf"\b{k}\b", txt)), "other")
+    return key, txt

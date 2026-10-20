@@ -48,7 +48,7 @@ const TEMPLATE = `
 
   <div class="card">
     <div class="card-head"><h3>Timeline <span class="pill" id="tlc">0</span></h3><button class="link" id="clear-all" type="button">Clear all</button></div>
-    <p class="mut hint">Sorted by date. Tap Before or After on a photo to choose the two to compare.</p>
+    <p class="mut small">Sorted by date. Tap Before or After on a photo to choose the two to compare.</p>
     <div class="tl2" id="tl"></div>
   </div>
 `;
