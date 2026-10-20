@@ -71,7 +71,7 @@ const EMPTY_BARS = '<span class="mut">Each rep appears here as a bar</span>';
 
 const TEMPLATE = `
   <div class="page-head">
-    <h2>Form check</h2>
+    <h2>Kinetiq</h2>
     <p class="mut">Pick your exercise (or leave it on Auto) and film with your whole body in frame, side-on if you can. Pose tracking runs on your device. On Auto, three still frames are sent to a vision model to name the exercise; pick an exercise yourself to send nothing.</p>
   </div>
 
@@ -731,7 +731,7 @@ function newSet(): void {
   setStage('idle');
 }
 
-/** Called when the user leaves the Form Check tab, so the camera never stays on in the background. */
+/** Called when the user leaves the Kinetiq tab, so the camera never stays on in the background. */
 export function stopForm(): void {
   if (stage === 'loading' || stage === 'live') {
     stopCapture();

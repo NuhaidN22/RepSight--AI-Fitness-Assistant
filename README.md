@@ -1,10 +1,10 @@
-# AI Fitness Coach
+# RepSight
 
 An AI coach that watches your form and learns from your training data. Built for the NVIDIA x Nebius hackathon.
 
 - **Log** workouts and build routines.
-- **Form check**: upload a video or use the camera. Pose tracking runs in your browser, counts reps and gives plain-language feedback.
-- **Coach chat**: a Nemotron model on Nebius answers using your own logs, body metrics and form results.
+- **Kinetiq** (form check): upload a video or use the camera. Pose tracking runs in your browser, counts reps and gives plain-language feedback.
+- **Sinew** (coach chat): Axon, our NVIDIA Nemotron model on Nebius, answers using your own logs, body metrics and form results.
 - **Dashboard**: weekly volume, PRs, bodyweight and BMI, form score trend, plateau flag and an AI weekly summary.
 - **Progress photos**: Before/After timeline, compare slider and a cautious AI comparison (no body-fat estimates).
 
@@ -19,11 +19,11 @@ Browser (frontend-ts, Vite + TypeScript)
 FastAPI (backend/) ── SQLite (app.db) + uploads/ (photos)
         │  OpenAI-compatible SDK
 Nebius Token Factory
- ├─ Nemotron (NVIDIA): coach chat, weekly and form summaries
+ ├─ Axon = NVIDIA Nemotron: Sinew coach chat, weekly and form summaries
  └─ Gemma 3 27B: names the exercise from 3 still frames; compares progress photos
 ```
 
-**Form check in detail**
+**Kinetiq in detail**
 - Pose gives joint positions only. A hysteresis state machine on one joint angle decides what a rep is.
 - Presets: squat, deadlift/hinge, push-up, chest press, biceps curl, dumbbell raise, overhead press. Pick one from the dropdown, or leave it on Auto.
 - On Auto, a vision model names the exercise from three frames. If that fails, the app falls back to locking onto the joint that moves the most. Knee and hip only count when the torso actually moves.

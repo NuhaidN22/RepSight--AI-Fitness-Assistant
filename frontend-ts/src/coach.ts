@@ -21,7 +21,7 @@ const EMPTY_HTML = `
 
 const TEMPLATE = `
   <div class="page-head">
-    <h2>AI Coach</h2>
+    <h2>Sinew</h2>
     <p class="mut">Ask about your training, form and progress. Answers are based on the data you have logged.</p>
   </div>
 
@@ -29,7 +29,7 @@ const TEMPLATE = `
     <div class="chat-head">
       <div class="coach-avatar">${ICONS.bot}</div>
       <div class="chat-title">
-        <b>Your coach</b>
+        <b>Sinew</b>
         <span class="status" id="coach-status"><i></i><em>Ready</em></span>
       </div>
       <button class="btn-ghost" id="clear-chat" type="button">Clear chat</button>
@@ -39,7 +39,7 @@ const TEMPLATE = `
     <button class="jump" id="jump" type="button" hidden>${ICONS.arrowDown} New messages</button>
 
     <form class="composer" id="chat-form">
-      <textarea id="q" rows="1" maxlength="1000" placeholder="Why is my squat stalling?" aria-label="Message your coach"></textarea>
+      <textarea id="q" rows="1" maxlength="1000" placeholder="Why is my squat stalling?" aria-label="Message Sinew"></textarea>
       <button class="send" id="send" type="submit" aria-label="Send" disabled>${ICONS.send}</button>
     </form>
     <p class="mut small foot">Coaching suggestions, not medical advice. Enter to send, Shift+Enter for a new line.</p>

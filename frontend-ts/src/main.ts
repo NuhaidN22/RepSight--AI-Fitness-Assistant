@@ -11,8 +11,8 @@ type TabId = 'log' | 'form' | 'coach' | 'dash' | 'photos';
 
 const TABS: ReadonlyArray<{ id: TabId; label: string }> = [
   { id: 'log', label: 'Log' },
-  { id: 'form', label: 'Form Check' },
-  { id: 'coach', label: 'Coach' },
+  { id: 'form', label: 'Kinetiq' },
+  { id: 'coach', label: 'Sinew' },
   { id: 'dash', label: 'Dashboard' },
   { id: 'photos', label: 'Photos' },
 ];

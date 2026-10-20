@@ -152,7 +152,7 @@ function renderAll(d: DashboardData): void {
     'form',
     d.form.map((r) => ({ label: r.date, value: r.score })),
     '/100',
-    '<p><b>No form checks yet</b></p><button class="btn-soft" type="button" data-go="form">Do a form check</button>',
+    '<p><b>No form checks yet</b></p><button class="btn-soft" type="button" data-go="form">Open Kinetiq</button>',
     0,
     100,
   );

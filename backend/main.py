@@ -10,7 +10,7 @@ import db, coach
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 UP = os.path.join(ROOT, "uploads"); os.makedirs(UP, exist_ok=True)
-app = FastAPI(title="AI Fitness Coach")
+app = FastAPI(title="RepSight")
 # Allow the separately-served frontend (Vite, Live Server, ...) to call this API from the browser.
 DEV_ORIGINS = [f"http://{h}:{p}" for h in ("localhost", "127.0.0.1") for p in (5173, 5500, 3000, 4173)]
 app.add_middleware(CORSMiddleware, allow_origins=DEV_ORIGINS, allow_methods=["*"], allow_headers=["*"])
@@ -90,7 +90,7 @@ ALLOWED_IMG = {".jpg", ".jpeg", ".png", ".webp"}
 async def photo(file: UploadFile = File(...), taken: str | None = Form(None)):
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in ALLOWED_IMG or not (file.content_type or "").startswith("image/"):
-        raise HTTPException(400, "Photos must be JPG, PNG or WEBP images. Videos go in the Form Check tab.")
+        raise HTTPException(400, "Photos must be JPG, PNG or WEBP images. Videos go in the Kinetiq tab.")
     try: day = dt.date.fromisoformat(taken).isoformat() if taken else today()
     except ValueError: raise HTTPException(400, "Date must look like 2026-10-08")
     data = await file.read()
