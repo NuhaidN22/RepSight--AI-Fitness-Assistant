@@ -1,5 +1,7 @@
 import { api } from './api';
-import type { FormResult, RepMetrics } from './types';
+import type { FormResult } from './api';
+import { createCounter, EXERCISES, toFormRep } from './repCounter';
+import type { Counter, Rep } from './repCounter';
 import { $, messageOf } from './ui';
 
 /* ---------- Minimal MediaPipe typings (library is loaded from the CDN on first use) ---------- */
@@ -12,7 +14,7 @@ interface Landmark extends Pt {
   visibility?: number;
 }
 interface PoseDetector {
-  detectForVideo(video: HTMLVideoElement, timestampMs: number): { landmarks: Landmark[][] };
+  detectForVideo(video: HTMLVideoElement, timestampMs: number): { landmarks: Landmark[][]; worldLandmarks?: Landmark[][] };
 }
 interface MediaPipeModule {
   FilesetResolver: { forVisionTasks(wasmPath: string): Promise<unknown> };
@@ -20,29 +22,20 @@ interface MediaPipeModule {
 }
 
 const MP_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
-const MODEL_URL =
-  'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+// Same BlazePose family in three sizes: bigger = more accurate with hidden or odd-angle joints, but slower.
+type ModelSize = 'full' | 'heavy';
+const modelUrl = (size: ModelSize): string =>
+  `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${size}/float16/1/pose_landmarker_${size}.task`;
 
-/* ---------- Tunable thresholds (heuristics, not validated science: change them freely) ---------- */
-const MIN_VISIBILITY = 0.5; // shoulder, hip, knee and ankle must each be at least this visible
+const MIN_VISIBILITY = 0.5; // shoulders and hips must each be at least this visible
 const SIDE_OK = 0.35; // shoulder-width / torso-length below this = clean side view
-const SIDE_MAX = 0.55; // above this = facing the camera, so a squat cannot be judged
-const MIN_HIP_DROP = 0.25; // hips must lower by >= 25% of torso length for a rep to count as a squat
-const GRACE_FRAMES = 8; // tolerate ~0.25 s of tracking flicker before discarding a half-finished rep
+const SIDE_MAX = 0.55; // above this = facing the camera, so lean and elbow drift cannot be judged
+const MAX_PEOPLE = 4; // pose model looks for up to this many people, then we follow just one
+const FOLLOW_DIST = 0.3; // target may move at most this far (fraction of frame height) between frames
+const GRACE_FRAMES = 8; // tolerate ~0.25 s of tracking flicker before showing a hint
 
 type Stage = 'idle' | 'loading' | 'live' | 'analyzing' | 'done';
 type Check = 'idle' | 'ok' | 'warn' | 'bad';
-interface RepState {
-  phase: 'up' | 'down';
-  minKnee: number;
-  maxDepth: number;
-  maxLean: number;
-  t0: number;
-  hip0: number; // hip height (px) while standing, just before this rep started
-  torso: number; // torso length (px) while standing
-  maxHipY: number; // lowest hip position reached during this rep
-}
-
 /** An error whose message is already written for the user. */
 class UserFacingError extends Error {}
 
@@ -57,7 +50,7 @@ const PHASE_LABEL: Record<Stage, string> = {
 const CHECK_DEFAULTS: Record<string, string> = {
   'chk-body': 'Body in frame',
   'chk-side': 'Side view',
-  'chk-squat': 'Squat pattern',
+  'chk-move': 'Movement',
 };
 
 /* ---------- Icons (inline SVG so they look the same on every OS) ---------- */
@@ -78,8 +71,8 @@ const EMPTY_BARS = '<span class="mut">Each rep appears here as a bar</span>';
 
 const TEMPLATE = `
   <div class="page-head">
-    <h2>Squat form check</h2>
-    <p class="mut">Film from the side with your whole body in frame. Pose tracking runs on your device, so the video never leaves your browser.</p>
+    <h2>Form check</h2>
+    <p class="mut">Pick your exercise (or leave it on Auto) and film with your whole body in frame, side-on if you can. Pose tracking runs on your device. On Auto, three still frames are sent to a vision model to name the exercise; pick an exercise yourself to send nothing.</p>
   </div>
 
   <div class="tips">
@@ -98,7 +91,7 @@ const TEMPLATE = `
 
         <div class="overlay ov-idle">
           ${GUIDE}
-          <b>Stand sideways, head to toe in frame</b>
+          <b>Head to toe in frame, side-on if you can</b>
           <span>Start your camera, upload a video, or drop one here.</span>
         </div>
         <div class="overlay ov-busy">
@@ -116,10 +109,14 @@ const TEMPLATE = `
       <div class="checks" aria-label="Tracking checks">
         <span class="check" id="chk-body" data-state="idle"><i></i><em>Body in frame</em></span>
         <span class="check" id="chk-side" data-state="idle"><i></i><em>Side view</em></span>
-        <span class="check" id="chk-squat" data-state="idle"><i></i><em>Squat pattern</em></span>
+        <span class="check" id="chk-move" data-state="idle"><i></i><em>Movement</em></span>
       </div>
 
       <div class="controls">
+        <select id="form-ex" aria-label="Exercise">
+          <option value="">Auto-detect exercise</option>
+          ${Object.values(EXERCISES).map((e) => `<option value="${e.key}">${e.label}</option>`).join('')}
+        </select>
         <button class="btn-primary" id="cam" type="button">${I_CAM} Start camera</button>
         <button class="btn-soft" id="upload" type="button">${I_UP} Upload video</button>
         <input id="vf" type="file" accept="video/*,.mov,.mp4,.m4v,.webm,.avi" hidden>
@@ -133,8 +130,8 @@ const TEMPLATE = `
         <div class="card-head"><h3>Live</h3><span id="phase" class="pill">Waiting</span></div>
         <div class="stats">
           <div class="stat"><b id="rc">0</b><span>Reps</span></div>
-          <div class="stat"><b id="knee">—</b><span>Knee angle</span></div>
-          <div class="stat"><b id="best">—</b><span>Deepest</span></div>
+          <div class="stat"><b id="knee">—</b><span>Angle</span></div>
+          <div class="stat"><b id="best">—</b><span>Best range</span></div>
         </div>
         <p id="ignored" class="mut small"></p>
       </div>
@@ -146,7 +143,7 @@ const TEMPLATE = `
         <div class="legend">
           <span><i style="background:var(--ok)"></i>Good rep</span>
           <span><i style="background:var(--ac)"></i>Needs work</span>
-          <span>Bar height = depth</span>
+          <span>Bar height = range of motion</span>
         </div>
       </div>
 
@@ -177,23 +174,18 @@ let v!: HTMLVideoElement;
 let cv!: HTMLCanvasElement;
 let cx!: CanvasRenderingContext2D;
 
-let detector: PoseDetector | undefined;
+const detectors: Partial<Record<ModelSize, PoseDetector>> = {};
 let stage: Stage = 'idle';
 let running = false;
 let rafId = 0;
 let objectUrl: string | null = null;
 let accent = '#e5383b';
-let reps: RepMetrics[] = [];
-let ignored = 0;
+let counter: Counter = createCounter('');
+let session = 0; // bumped on every new set, so a slow identify reply for an old set is ignored
+let isFile = false;
+let reps: Rep[] = [];
 let selected: number | null = null;
 let badFrames = 0;
-let stand: { hipY: number; torso: number } | null = null;
-let st: RepState = freshState();
-
-function freshState(): RepState {
-  return { phase: 'up', minKnee: 180, maxDepth: -1, maxLean: 0, t0: 0, hip0: 0, torso: 0, maxHipY: 0 };
-}
-
 /* ---------- UI helpers ---------- */
 
 function setStage(next: Stage, message = ''): void {
@@ -236,31 +228,21 @@ function resetChecks(): void {
   for (const [id, label] of Object.entries(CHECK_DEFAULTS)) setCheck(id, 'idle', label);
 }
 
-function setGauge(knee: number | null): void {
+function setGauge(angle: number | null): void {
   const fill = $('gauge-fill');
-  if (knee === null) {
-    fill.style.height = '0%';
-    $('gauge').classList.remove('reached');
-    return;
-  }
-  const flexion = Math.max(0, Math.min(1, (180 - knee) / 120)); // 180° = straight leg, 60° = very deep
-  fill.style.height = `${flexion * 100}%`;
-  $('gauge').classList.toggle('reached', knee < 125); // 125° is the "this counts as a rep" line
+  fill.style.height = angle === null ? '0%' : `${Math.max(0, Math.min(1, angle / 180)) * 100}%`;
 }
 
-function repInfo(r: RepMetrics, i: number): string {
-  const depth = r.depth_ok ? 'depth reached' : 'too shallow';
-  const torso = r.torso_ok ? 'torso upright' : `torso leaning ${r.max_torso_lean}°`;
-  return `Rep ${i + 1} · knee ${r.min_knee_angle}° · ${depth} · ${torso} · ${r.tempo_s}s`;
+function repInfo(r: Rep): string {
+  const issues = r.flags.length ? r.flags.join(', ') : 'good form';
+  return `Rep ${r.index} · ${r.minAngle}°–${r.maxAngle}° · ${issues} · ${r.durationS}s`;
 }
 
 function renderReps(): void {
   $('rc').textContent = String(reps.length);
   $('rc2').textContent = String(reps.length);
-  $('best').textContent = reps.length ? `${Math.min(...reps.map((r) => r.min_knee_angle))}°` : '—';
-  $('ignored').textContent = ignored
-    ? `${ignored} movement${ignored === 1 ? '' : 's'} ignored because the hips barely moved (not a squat).`
-    : '';
+  $('best').textContent = reps.length ? `${Math.max(...reps.map((r) => r.maxAngle - r.minAngle))}°` : '—';
+  $('ignored').textContent = counter.exercise ? `Tracking: ${counter.label}` : '';
 
   const bars = $('bars');
   bars.classList.toggle('is-empty', reps.length === 0);
@@ -272,22 +254,23 @@ function renderReps(): void {
   const active = selected !== null && selected < reps.length ? selected : reps.length - 1;
   bars.innerHTML = reps
     .map((r, i) => {
-      const good = r.depth_ok === 1 && r.torso_ok === 1;
-      const height = Math.max(10, Math.min(100, ((180 - r.min_knee_angle) / 150) * 100));
-      return `<button type="button" class="bar-col ${good ? 'good' : 'bad'}${i === active ? ' active' : ''}" data-i="${i}" style="height:${height}%" aria-label="Rep ${i + 1}, knee ${r.min_knee_angle} degrees"></button>`;
+      const good = r.fullRange && r.postureOk;
+      const height = Math.max(10, Math.min(100, ((r.maxAngle - r.minAngle) / 150) * 100));
+      return `<button type="button" class="bar-col ${good ? 'good' : 'bad'}${i === active ? ' active' : ''}" data-i="${i}" style="height:${height}%" aria-label="Rep ${r.index}, range ${r.minAngle} to ${r.maxAngle} degrees"></button>`;
     })
     .join('');
   const shown = reps[active];
-  if (shown) $('repinfo').textContent = repInfo(shown, active);
+  if (shown) $('repinfo').textContent = repInfo(shown);
 }
 
 function resetSession(): void {
+  counter = createCounter($<HTMLSelectElement>('form-ex').value);
   reps = [];
-  ignored = 0;
   selected = null;
   badFrames = 0;
-  stand = null;
-  st = freshState();
+  target = null;
+  locked = false;
+  detectedPoses = [];
   renderReps();
   resetChecks();
   setHint('');
@@ -301,32 +284,25 @@ function resetSession(): void {
 
 /* ---------- Pose model ---------- */
 
-async function loadDetector(): Promise<PoseDetector> {
-  if (detector) return detector;
+async function loadDetector(size: ModelSize): Promise<PoseDetector> {
+  const cached = detectors[size];
+  if (cached) return cached;
   try {
     const mod = (await import(/* @vite-ignore */ `${MP_BASE}/+esm`)) as MediaPipeModule;
     const fileset = await mod.FilesetResolver.forVisionTasks(`${MP_BASE}/wasm`);
-    detector = await mod.PoseLandmarker.createFromOptions(fileset, {
-      baseOptions: { modelAssetPath: MODEL_URL },
+    const created = await mod.PoseLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: modelUrl(size) },
       runningMode: 'VIDEO',
-      numPoses: 1,
+      numPoses: MAX_PEOPLE,
     });
-    return detector;
+    detectors[size] = created;
+    return created;
   } catch {
     throw new UserFacingError('Could not load the pose model. Check your internet connection (it downloads on first use) and try again.');
   }
 }
 
 /* ---------- Geometry ---------- */
-
-const angle = (a: Pt, b: Pt, c: Pt): number => {
-  const r = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
-  const d = Math.abs((r * 180) / Math.PI);
-  return d > 180 ? 360 - d : d;
-};
-
-const LEFT = [11, 23, 25, 27]; // shoulder, hip, knee, ankle
-const RIGHT = [12, 24, 26, 28];
 
 /** How "side-on" is the body? Compares shoulder width with torso length. */
 function viewState(p: Landmark[]): { state: Check; ratio: number } {
@@ -343,134 +319,243 @@ function viewState(p: Landmark[]): { state: Check; ratio: number } {
   return { state: ratio < SIDE_OK ? 'ok' : ratio < SIDE_MAX ? 'warn' : 'bad', ratio };
 }
 
-/* ---------- Rep detection ---------- */
+/* ---------- Target person ---------- */
 
-function finishRep(now: number): void {
-  const drop = st.torso > 0 ? (st.maxHipY - st.hip0) / st.torso : 0;
-  if (drop < MIN_HIP_DROP) {
-    ignored += 1;
-    setCheck('chk-squat', 'bad', 'Not a squat pattern');
-    setFeedback("That didn't look like a squat (hips barely moved)", false);
-    renderReps();
-    return;
-  }
+let target: Pt | null = null; // where the person we follow was last seen (normalized frame coordinates)
+let locked = false; // true once the user tapped a person: never jump to someone else on size alone
 
-  const rep: RepMetrics = {
-    min_knee_angle: Math.round(st.minKnee),
-    depth_ok: st.maxDepth >= -0.01 ? 1 : 0,
-    torso_ok: st.maxLean < 55 ? 1 : 0,
-    max_torso_lean: Math.round(st.maxLean),
-    tempo_s: Number(((now - st.t0) / 1000).toFixed(1)),
-  };
-  reps.push(rep);
-  selected = null;
-  setCheck('chk-squat', 'ok', 'Squat pattern');
-  renderReps();
-  if (!rep.depth_ok) setFeedback('Go deeper: hips to knee level', false);
-  else if (!rep.torso_ok) setFeedback('Chest up: torso leaning too far', false);
-  else setFeedback('Good rep ✔', true);
+/** Centre of the torso (shoulders + hips) and its length, or null if the torso is not visible. */
+function torsoOf(p: Landmark[]): { c: Pt; len: number } | null {
+  const pts = [11, 12, 23, 24].map((i) => p[i]);
+  if (pts.some((q) => !q || (q.visibility ?? 0) < 0.4)) return null;
+  const c = { x: pts.reduce((a, q) => a + q.x, 0) / 4, y: pts.reduce((a, q) => a + q.y, 0) / 4 };
+  const len = Math.hypot((((p[11].x + p[12].x) - (p[23].x + p[24].x)) / 2) * (cv.width / cv.height), ((p[11].y + p[12].y) - (p[23].y + p[24].y)) / 2);
+  return { c, len };
 }
 
-function drawPose(points: Landmark[], knee: number): void {
+const gap = (a: Pt, b: Pt): number => Math.hypot((a.x - b.x) * (cv.width / cv.height), a.y - b.y);
+
+/** Index of the person to follow: nearest to where we last saw them; at the start, the biggest and most central one. */
+function pickTarget(poses: Landmark[][]): number {
+  let best = -1;
+  let bestScore = -Infinity;
+  poses.forEach((p, i) => {
+    const t = torsoOf(p);
+    if (!t) return;
+    const score = target ? -gap(t.c, target) : t.len * (1 - 0.6 * gap(t.c, { x: 0.5, y: 0.5 }));
+    if (score > bestScore) {
+      bestScore = score;
+      best = i;
+    }
+  });
+  if (best >= 0 && target) {
+    const t = torsoOf(poses[best]);
+    if (t && gap(t.c, target) > FOLLOW_DIST) {
+      if (locked) return -1; // our person left the frame: wait for them rather than switch
+      target = null;
+      return pickTarget(poses);
+    }
+  }
+  if (best >= 0) {
+    const t = torsoOf(poses[best]);
+    if (t) target = t.c;
+  }
+  return best;
+}
+
+function onCanvasTap(ev: MouseEvent): void {
+  if (!running || !detectedPoses.length) return;
+  const box = cv.getBoundingClientRect();
+  const tap = { x: (ev.clientX - box.left) / box.width, y: (ev.clientY - box.top) / box.height };
+  let best = -1;
+  let bestGap = Infinity;
+  detectedPoses.forEach((p, i) => {
+    const t = torsoOf(p);
+    if (t && gap(t.c, tap) < bestGap) {
+      bestGap = gap(t.c, tap);
+      best = i;
+    }
+  });
+  const chosen = best >= 0 ? torsoOf(detectedPoses[best]) : null;
+  if (!chosen) return;
+  target = chosen.c;
+  locked = true;
+  counter = createCounter($<HTMLSelectElement>('form-ex').value);
+  reps = [];
+  renderReps();
+}
+
+let detectedPoses: Landmark[][] = [];
+
+/** Other people are drawn faint so you can see who is being ignored. */
+function drawOthers(poses: Landmark[][], skip: number): void {
+  const w = cv.width;
+  const h = cv.height;
+  cx.save();
+  cx.globalAlpha = 0.35;
+  cx.lineWidth = Math.max(2, w / 250);
+  cx.strokeStyle = '#fff';
+  poses.forEach((p, i) => {
+    if (i === skip) return;
+    for (const [a, b] of BONES) {
+      const q = p[a];
+      const r = p[b];
+      if (!q || !r || (q.visibility ?? 1) < 0.4 || (r.visibility ?? 1) < 0.4) continue;
+      cx.beginPath();
+      cx.moveTo(q.x * w, q.y * h);
+      cx.lineTo(r.x * w, r.y * h);
+      cx.stroke();
+    }
+  });
+  cx.restore();
+}
+
+/* ---------- Rep detection ---------- */
+
+const BONES: [number, number][] = [[11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [23, 24], [23, 25], [25, 27], [24, 26], [26, 28]];
+const BODY_POINTS = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+
+function drawPose(points: Landmark[], vertex: number | null, deg: number | null): void {
   const w = cv.width;
   const h = cv.height;
   cx.lineJoin = 'round';
   cx.lineCap = 'round';
   cx.lineWidth = Math.max(3, w / 160);
   cx.strokeStyle = accent;
-  cx.beginPath();
-  points.forEach((p, i) => (i === 0 ? cx.moveTo(p.x * w, p.y * h) : cx.lineTo(p.x * w, p.y * h)));
-  cx.stroke();
-
   const radius = Math.max(5, w / 110);
-  for (const p of points) {
+  const seen = (p?: Landmark): p is Landmark => !!p && (p.visibility ?? 1) >= 0.4;
+  for (const [a, b] of BONES) {
+    const p = points[a];
+    const q = points[b];
+    if (!seen(p) || !seen(q)) continue;
+    cx.beginPath();
+    cx.moveTo(p.x * w, p.y * h);
+    cx.lineTo(q.x * w, q.y * h);
+    cx.stroke();
+  }
+  for (const i of BODY_POINTS) {
+    const p = points[i];
+    if (!seen(p)) continue;
     cx.beginPath();
     cx.arc(p.x * w, p.y * h, radius, 0, Math.PI * 2);
     cx.fillStyle = '#fff';
     cx.fill();
     cx.lineWidth = 3;
-    cx.strokeStyle = accent;
     cx.stroke();
   }
 
-  const k = points[2];
-  if (k) {
+  const k = vertex !== null ? points[vertex] : undefined;
+  if (k && deg !== null) {
     cx.font = `600 ${Math.max(14, w / 36)}px Inter, system-ui, sans-serif`;
     cx.fillStyle = '#fff';
     cx.shadowColor = 'rgb(0 0 0 / .8)';
     cx.shadowBlur = 6;
-    cx.fillText(`${Math.round(knee)}°`, k.x * w + radius + 8, k.y * h);
+    cx.fillText(`${Math.round(deg)}°`, k.x * w + radius + 8, k.y * h);
     cx.shadowBlur = 0;
   }
 }
 
-function onPose(p: Landmark[], now: number): void {
-  const vis = (ids: number[]): number => ids.reduce((sum, i) => sum + (p[i]?.visibility ?? 0), 0);
-  const ids = vis(LEFT) >= vis(RIGHT) ? LEFT : RIGHT;
-  const [s, h, k, a] = ids.map((i) => p[i]);
-  if (!s || !h || !k || !a) return;
-
-  // Gate 1: are all four joints actually visible (not guessed by the model)?
-  const bodyVisible = [s, h, k, a].every((pt) => (pt.visibility ?? 0) >= MIN_VISIBILITY);
-  // Gate 2: are we looking at the person from the side?
+function onPose(p: Landmark[], now: number, world?: Landmark[]): void {
+  const bodyVisible = [11, 12, 23, 24].every((i) => (p[i]?.visibility ?? 0) >= MIN_VISIBILITY);
   const view = viewState(p);
-  setCheck('chk-body', bodyVisible ? 'ok' : 'bad', bodyVisible ? 'Body in frame' : 'Legs not visible');
-  setCheck(
-    'chk-side',
-    view.state,
-    view.state === 'ok' ? 'Side view' : view.state === 'warn' ? 'Turn a bit more sideways' : 'Facing the camera',
-  );
+  setCheck('chk-body', bodyVisible ? 'ok' : 'bad', bodyVisible ? 'Body in frame' : 'Body not visible');
+  setCheck('chk-side', view.state, view.state === 'ok' ? 'Side view' : view.state === 'warn' ? 'Turn a bit more sideways' : 'Facing the camera');
 
-  if (!bodyVisible || view.state === 'bad') {
+  if (!bodyVisible) {
     badFrames += 1;
-    if (badFrames > GRACE_FRAMES) {
-      setHint(!bodyVisible ? 'Step back: I need to see your whole body' : 'Turn sideways to the camera');
-      st = freshState(); // discard any half-finished rep built from unreliable points
-      stand = null;
-      setGauge(null);
-      $('knee').textContent = '—';
-    }
+    if (badFrames > GRACE_FRAMES) setHint('Step back: I need to see your whole body');
     return;
   }
   badFrames = 0;
-  setHint('');
+  setHint(view.state === 'bad' ? 'Turn side-on for lean and elbow checks (rep counting still works)' : '');
 
-  // Angles use pixel coordinates; normalized x and y have different scales on non-square video.
-  const px = (l: Landmark): Pt => ({ x: l.x * cv.width, y: l.y * cv.height });
-  const S = px(s);
-  const H = px(h);
-  const K = px(k);
-  const A = px(a);
-  const knee = angle(H, K, A);
-  const lean = Math.abs((Math.atan2(S.x - H.x, H.y - S.y) * 180) / Math.PI);
-  const torso = Math.hypot(S.x - H.x, S.y - H.y);
-  $('knee').textContent = `${Math.round(knee)}°`;
-  setGauge(knee);
+  const rep = counter.update(p, now, cv.width / cv.height, world);
+  const deg = counter.angle;
+  $('knee').textContent = deg === null ? '—' : `${Math.round(deg)}°`;
+  setGauge(deg);
+  setCheck('chk-move', counter.exercise ? 'ok' : 'warn', counter.exercise ?? 'Detecting movement…');
+  if ('debug' in counter) {
+    const dbg = (counter as unknown as { debug: Record<string, { range: number }> }).debug;
+    const text = Object.entries(dbg).map(([j, d]) => `${j} ${d.range}°`).join(' · ');
+    if ($('ignored').textContent !== text) $('ignored').textContent = text ? `Joint movement: ${text}` : '';
+  }
+  if (rep) {
+    reps.push(rep);
+    selected = null;
+    renderReps();
+    setFeedback(rep.flags.length ? rep.flags.join(' · ') : 'Good rep ✔', rep.flags.length === 0);
+  }
+  drawPose(p, counter.vertex, deg);
+}
 
-  if (st.phase === 'up' && knee > 160) stand = { hipY: H.y, torso }; // remember the standing baseline
-  if (st.phase === 'up' && knee < 140) {
-    st = {
-      phase: 'down',
-      minKnee: knee,
-      maxDepth: -1,
-      maxLean: 0,
-      t0: now,
-      hip0: stand?.hipY ?? H.y,
-      torso: stand?.torso ?? torso,
-      maxHipY: H.y,
+/* ---------- Exercise identification (vision model) ---------- */
+
+/** Current video frame as a small JPEG data URL (keeps the upload to a few tens of KB). */
+function grabFrame(): string {
+  const w = 384;
+  const h = Math.round((w * (v.videoHeight || 480)) / (v.videoWidth || 640));
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  c.getContext('2d')?.drawImage(v, 0, 0, w, h);
+  return c.toDataURL('image/jpeg', 0.7);
+}
+
+function seekTo(seconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    const done = (): void => {
+      v.removeEventListener('seeked', done);
+      resolve();
     };
+    v.addEventListener('seeked', done);
+    v.currentTime = seconds;
+    setTimeout(done, 2000); // never hang on a codec that does not fire 'seeked'
+  });
+}
+
+/** Ask the vision model which exercise this is, then switch to that exercise's rules. */
+async function identify(frames: string[], mine: number): Promise<void> {
+  if ($<HTMLSelectElement>('form-ex').value) return; // the user already chose
+  try {
+    const { exercise } = await api.identifyExercise(frames);
+    const cfg = EXERCISES[exercise];
+    if (mine !== session || !cfg || $<HTMLSelectElement>('form-ex').value) return; // stale, unknown or "other": stay on auto
+    counter = createCounter(cfg.label);
+    reps = [];
+    renderReps();
+    $('ignored').textContent = `Exercise identified by the vision model: ${cfg.label}`;
+  } catch {
+    $('ignored').textContent = 'Could not identify the exercise automatically. Pick it from the list for the best result.';
   }
-  if (st.phase === 'down') {
-    st.minKnee = Math.min(st.minKnee, knee);
-    st.maxDepth = Math.max(st.maxDepth, h.y - k.y); // normalized: y grows downward
-    st.maxLean = Math.max(st.maxLean, lean);
-    st.maxHipY = Math.max(st.maxHipY, H.y);
-    if (knee > 160) {
-      st.phase = 'up';
-      if (st.minKnee < 125) finishRep(now);
+}
+
+/** Uploaded video: sample three moments before playback starts so counting uses the right rules from rep 1. */
+async function identifyFile(mine: number): Promise<void> {
+  if ($<HTMLSelectElement>('form-ex').value || !(v.duration > 1)) return;
+  const frames: string[] = [];
+  for (const at of [0.2, 0.45, 0.7]) {
+    await seekTo(v.duration * at);
+    frames.push(grabFrame());
+  }
+  await seekTo(0);
+  await identify(frames, mine);
+}
+
+/** Live camera: sample one frame a second for three seconds, then identify. */
+function identifyLive(mine: number): void {
+  if ($<HTMLSelectElement>('form-ex').value) return;
+  const frames: string[] = [];
+  const timer = window.setInterval(() => {
+    if (mine !== session || !running) {
+      window.clearInterval(timer);
+      return;
     }
-  }
-  drawPose([s, h, k, a], knee);
+    frames.push(grabFrame());
+    if (frames.length === 3) {
+      window.clearInterval(timer);
+      void identify(frames, mine);
+    }
+  }, 1500);
 }
 
 /* ---------- Capture lifecycle ---------- */
@@ -516,8 +601,13 @@ function loop(model: PoseDetector): void {
   try {
     if (v.readyState >= 2) {
       cx.drawImage(v, 0, 0, cv.width, cv.height);
-      const pose = model.detectForVideo(v, performance.now()).landmarks[0];
-      if (pose) onPose(pose, v.currentTime * 1000);
+      const result = model.detectForVideo(v, performance.now());
+      detectedPoses = result.landmarks;
+      const who = pickTarget(result.landmarks);
+      drawOthers(result.landmarks, who);
+      const pose = result.landmarks[who];
+      if (pose) onPose(pose, v.currentTime * 1000, result.worldLandmarks?.[who]);
+      if (result.landmarks.length > 1 && !locked) setHint('Several people detected: tap the person you want me to follow');
     }
   } catch (error) {
     fail(error);
@@ -526,18 +616,22 @@ function loop(model: PoseDetector): void {
   rafId = requestAnimationFrame(() => loop(model));
 }
 
-async function begin(): Promise<void> {
+async function begin(size: ModelSize): Promise<void> {
   setStage('loading', 'Loading pose model… the first time takes a few seconds');
-  const model = await loadDetector();
+  const model = await loadDetector(size);
   accent = getComputedStyle(document.documentElement).getPropertyValue('--ac2').trim() || accent;
+  const mine = session;
+  if (isFile) await identifyFile(mine);
   await v.play();
   fitCanvas();
   running = true;
   setStage('live');
+  if (!isFile) identifyLive(mine);
   loop(model);
 }
 
 function prepare(): void {
+  session += 1;
   showError('');
   stopCapture();
   resetSession();
@@ -545,13 +639,14 @@ function prepare(): void {
 
 async function startCamera(): Promise<void> {
   prepare();
+  isFile = false;
   setStage('loading', 'Starting camera…');
   try {
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new UserFacingError('The camera needs a secure page (https or localhost). Try uploading a video instead.');
     }
     v.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
-    await begin();
+    await begin('full'); // live camera: keep it fast enough to run in real time
   } catch (error) {
     fail(error);
   }
@@ -559,6 +654,7 @@ async function startCamera(): Promise<void> {
 
 function startFile(file: File): void {
   prepare();
+  isFile = true;
   setStage('loading', `Loading ${file.name}…`);
   objectUrl = URL.createObjectURL(file);
   v.src = objectUrl;
@@ -566,7 +662,7 @@ function startFile(file: File): void {
     fail(new UserFacingError("This browser can't play that video (iPhone .mov files often use HEVC). Convert it to MP4 (H.264) and try again."));
   };
   v.onloadeddata = () => {
-    void begin().catch(fail);
+    void begin('heavy').catch(fail); // uploaded video: accuracy matters more than speed
   };
   v.onended = () => {
     if (stage === 'live') void finish();
@@ -582,20 +678,24 @@ function meterRow(label: string, hits: number, total: number): string {
 
 function showResult(result: FormResult): void {
   const n = reps.length;
-  const tempo = n ? reps.reduce((sum, r) => sum + r.tempo_s, 0) / n : 0;
+  const tempo = n ? reps.reduce((sum, r) => sum + r.durationS, 0) / n : 0;
   $('res-card').hidden = false;
   $('res-ok').hidden = false;
   $('res-err').textContent = '';
   $('retry').hidden = true;
   $('ring').style.setProperty('--p', String(Math.max(0, Math.min(100, result.score))));
   $('score').textContent = String(Math.round(result.score));
-  $('res-title').textContent = `${result.rep_count} rep${result.rep_count === 1 ? '' : 's'} analyzed`;
+  $('res-title').textContent = `${result.rep_count} rep${result.rep_count === 1 ? '' : 's'} of ${result.exercise}`;
   $('res-sum').textContent = result.summary; // textContent: AI text is never parsed as HTML
+  const issues = Object.entries(result.flags ?? {}).sort((a, b) => b[1] - a[1]);
   $('meters').innerHTML =
-    meterRow('Depth reached', reps.filter((r) => r.depth_ok === 1).length, n) +
-    meterRow('Torso upright', reps.filter((r) => r.torso_ok === 1).length, n) +
+    meterRow('Full range of motion', reps.filter((r) => r.fullRange).length, n) +
+    meterRow('Good posture', reps.filter((r) => r.postureOk).length, n) +
+    issues.map(([text, count]) => meterRow(escapeHtml(text), n - count, n)).join('') +
     `<p class="mut small">Average tempo ${tempo.toFixed(1)} s per rep</p>`;
 }
+
+const escapeHtml = (t: string): string => t.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 function showAnalysisError(error: unknown): void {
   $('res-card').hidden = false;
@@ -607,7 +707,7 @@ function showAnalysisError(error: unknown): void {
 async function analyze(): Promise<void> {
   setStage('analyzing', 'Analyzing your reps…');
   try {
-    showResult(await api.analyzeForm('squat', reps));
+    showResult(await api.saveForm(counter.exercise ?? 'Exercise', reps.map(toFormRep)));
   } catch (error) {
     showAnalysisError(error);
   } finally {
@@ -619,11 +719,7 @@ async function finish(): Promise<void> {
   stopCapture();
   if (reps.length === 0) {
     setStage('idle');
-    showError(
-      ignored > 0
-        ? "I saw movement but none of it looked like a squat. Film a side view of a squat with your full body in frame, then try again."
-        : 'No complete reps detected. Film from the side with your full body in frame and good light, then try again.',
-    );
+    showError('No complete reps detected. Film with your full body in frame and good light, pick the exercise from the list, and try again.');
     return;
   }
   await analyze();
@@ -674,6 +770,9 @@ export function initForm(): void {
     input.value = ''; // lets you pick the same file twice
     if (file) startFile(file);
   });
+
+  cv.addEventListener('click', onCanvasTap);
+  cv.style.cursor = 'pointer';
 
   const stageBox = $('stage');
   stageBox.addEventListener('dragover', (ev) => ev.preventDefault());

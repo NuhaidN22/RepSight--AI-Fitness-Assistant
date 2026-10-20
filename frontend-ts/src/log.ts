@@ -337,7 +337,7 @@ function renderRoutines(routines: Routine[]): void {
     return;
   }
   box.innerHTML =
-    '<p class="mut hint">Tap an exercise to load it into the logger.</p>' +
+    '<p class="mut small">Tap an exercise to load it into the logger.</p>' +
     routines
       .map(
         (r) => `

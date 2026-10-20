@@ -1,108 +1,81 @@
-import type {
-  DashboardData,
-  Exercise,
-  FormResult,
-  NewRoutine,
-  NewSet,
-  Photo,
-  PhotoAnalysis,
-  PhotoUploadResult,
-  RepMetrics,
-  Routine,
-  SummaryResult,
-  WorkoutSet,
-} from './types';
+// api.ts - the ONLY file that knows how to talk to the FastAPI backend.
+// Every screen imports functions from here instead of calling fetch() directly.
 
-export class ApiError extends Error {
-  readonly status: number;
+// Where the backend lives. Set VITE_API_URL in a .env file to override (Vite only).
+// If this page is served BY the backend (port 8000), use "" so requests stay same-origin.
+const fromEnv = (import.meta as any).env?.VITE_API_URL as string | undefined;
+export const BASE: string = fromEnv ?? (location.port === "8000" ? "" : "http://localhost:8000");
 
-  constructor(message: string, status: number) {
-    super(message);
-    this.name = 'ApiError';
-    this.status = status;
-  }
+// ---- Types: the shape of what the backend sends back ----
+export interface Exercise { name: string; muscle: string }
+export interface SetLog { id: number; date: string; exercise: string; reps: number; weight: number; rpe: number | null }
+export interface Routine { id: number; name: string; items: { exercise: string; sets: number; reps: number }[] }
+export interface Photo { id: number; date: string; path: string; caption: string }
+export interface FormRep {
+  depth_ok: 0 | 1; torso_ok: 0 | 1; tempo_s: number;          // required by the backend
+  flags?: string[]; min_angle?: number; max_angle?: number;
+  torso_lean?: number | null; elbow_drift?: number | null; body_line?: number | null;
+}
+export interface FormResult {
+  score: number; summary: string; exercise: string; rep_count: number; depth_pct: number; torso_pct: number; avg_tempo_s: number;
+  flags: Record<string, number>;                              // issue text -> number of reps it appeared in
+}
+export interface Dashboard {
+  weekly_volume: number; prs: { exercise: string; weight: number }[];
+  weight: { date: string; weight: number }[]; form: { date: string; score: number }[];
+  plateau: boolean; bmi: number | null;
 }
 
-const OFFLINE = 'Cannot reach the server. Is the backend running?';
-
-/** FastAPI puts a human-readable message in `detail` when it rejects a request. */
-async function errorMessage(res: Response): Promise<string> {
-  try {
-    const body = (await res.json()) as { detail?: unknown };
-    if (typeof body.detail === 'string') return body.detail;
-  } catch {
-    // response had no JSON body; fall through to the generic message
-  }
-  return `Request failed (${res.status})`;
-}
-
+// ---- Core helpers ----
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(`/api/${path}`, init);
-  } catch {
-    throw new ApiError(OFFLINE, 0);
+  const res = await fetch(`${BASE}/api/${path}`, init);
+  let body: any = null;
+  try { body = await res.json(); } catch { /* empty or non-JSON body */ }
+  if (!res.ok) {
+    const d = body?.detail;                                     // FastAPI puts error text in "detail"
+    throw new Error(typeof d === "string" ? d : d ? JSON.stringify(d) : `Request failed (${res.status})`);
   }
-  if (!res.ok) throw new ApiError(await errorMessage(res), res.status);
-  return (await res.json()) as T;
+  return body as T;
 }
+const json = (method: string, data?: unknown): RequestInit => ({
+  method, headers: { "Content-Type": "application/json" }, body: data === undefined ? undefined : JSON.stringify(data),
+});
 
-function jsonInit(method: 'POST' | 'DELETE', body?: unknown): RequestInit {
-  return {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  };
-}
+// ---- Endpoints ----
+export const api = {
+  exercises: () => request<Exercise[]>("exercises"),
+  sets: (exercise?: string) => request<SetLog[]>(exercise ? `sets?exercise=${encodeURIComponent(exercise)}` : "sets"),
+  addSet: (s: { exercise: string; reps: number; weight: number; rpe?: number | null }) => request<{ ok: true }>("sets", json("POST", s)),
+  addMetrics: (weight: number, height?: number | null) => request<{ ok: true }>("metrics", json("POST", { weight, height })),
+  dashboard: () => request<Dashboard>("dashboard"),
+  summary: () => request<{ summary: string }>("summary"),
+  routines: () => request<Routine[]>("routines"),
+  addRoutine: (r: { name: string; items: Routine["items"] }) => request<{ ok: true }>("routines", json("POST", r)),
+  deleteRoutine: (id: number) => request<{ ok: true }>(`routines/${id}`, json("DELETE")),
+  saveForm: (exercise: string, reps: FormRep[]) => request<FormResult>("form", json("POST", { exercise, reps })),   // exercise is required: never default to squat
+  identifyExercise: (frames: string[]) => request<{ exercise: string; raw: string }>("identify", json("POST", { frames })),
+  photos: () => request<Photo[]>("photos"),
+  uploadPhoto: (file: File, taken: string) => {
+    const fd = new FormData(); fd.append("file", file); fd.append("taken", taken);
+    return request<{ ok: true; id: number }>("photos", { method: "POST", body: fd }); // no Content-Type: browser adds the multipart boundary
+  },
+  deletePhoto: (id: number) => request<{ ok: true }>(`photos/${id}`, json("DELETE")),
+  deleteAllPhotos: () => request<{ ok: true }>("photos", json("DELETE")),
+  analyzePhotos: (before_id: number, after_id: number) => request<{ caption?: string; detail?: string }>("photos/analyze", json("POST", { before_id, after_id })),
+  deleteAllData: () => request<{ ok: true }>("data", json("DELETE")),
+};
 
-/**
- * The coach replies as a plain-text stream. We read it chunk by chunk and hand
- * every piece to `onChunk` so the UI can show the answer as it is written.
- * Aborting through `signal` rejects with a DOMException named "AbortError".
- */
-export async function streamCoach(message: string, onChunk: (chunk: string) => void, signal: AbortSignal): Promise<void> {
-  let res: Response;
-  try {
-    res = await fetch('/api/coach', { ...jsonInit('POST', { message }), signal });
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') throw error;
-    throw new ApiError(OFFLINE, 0);
-  }
-  if (!res.ok || !res.body) throw new ApiError(await errorMessage(res), res.status);
+// Photo paths come back as "/uploads/xyz.jpg" - prefix the backend address so <img> works from another origin.
+export const photoUrl = (path: string) => BASE + path;
 
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
+// The coach streams plain text, so it can't go through request<T>() (which waits for JSON).
+export async function streamCoach(message: string, onChunk: (text: string) => void, signal?: AbortSignal): Promise<void> {
+  const res = await fetch(`${BASE}/api/coach`, { ...json("POST", { message }), signal });
+  if (!res.ok || !res.body) throw new Error(`Coach request failed (${res.status})`);
+  const reader = res.body.getReader(), dec = new TextDecoder();
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    onChunk(decoder.decode(value, { stream: true })); // stream:true keeps multi-byte characters intact across chunks
+    onChunk(dec.decode(value, { stream: true }));               // stream:true keeps multi-byte characters intact across chunks
   }
 }
-
-export const api = {
-  exercises: () => request<Exercise[]>('exercises'),
-  sets: () => request<WorkoutSet[]>('sets'),
-  addSet: (set: NewSet) => request<unknown>('sets', jsonInit('POST', set)),
-  routines: () => request<Routine[]>('routines'),
-  addRoutine: (routine: NewRoutine) => request<unknown>('routines', jsonInit('POST', routine)),
-  deleteRoutine: (id: number) => request<unknown>(`routines/${id}`, jsonInit('DELETE')),
-  analyzeForm: (exercise: string, reps: RepMetrics[]) =>
-    request<FormResult>('form', jsonInit('POST', { exercise, reps })),
-
-  dashboard: () => request<DashboardData>('dashboard'),
-  addMetrics: (weight: number, height: number | null) => request<unknown>('metrics', jsonInit('POST', { weight, height })),
-  summary: () => request<SummaryResult>('summary'),
-  deleteAllData: () => request<unknown>('data', jsonInit('DELETE')),
-
-  photos: () => request<Photo[]>('photos'),
-  uploadPhoto: (file: File, taken: string) => {
-    const form = new FormData();
-    form.append('file', file);
-    form.append('taken', taken);
-    return request<PhotoUploadResult>('photos', { method: 'POST', body: form }); // no JSON header: the browser sets the multipart boundary
-  },
-  deletePhoto: (id: number) => request<unknown>(`photos/${id}`, jsonInit('DELETE')),
-  deleteAllPhotos: () => request<unknown>('photos', jsonInit('DELETE')),
-  analyzePhotos: (beforeId: number, afterId: number) =>
-    request<PhotoAnalysis>('photos/analyze', jsonInit('POST', { before_id: beforeId, after_id: afterId })),
-};

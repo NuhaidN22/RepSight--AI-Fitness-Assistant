@@ -4,21 +4,26 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 import db, coach
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 UP = os.path.join(ROOT, "uploads"); os.makedirs(UP, exist_ok=True)
 app = FastAPI(title="AI Fitness Coach")
+# Allow the separately-served frontend (Vite, Live Server, ...) to call this API from the browser.
+DEV_ORIGINS = [f"http://{h}:{p}" for h in ("localhost", "127.0.0.1") for p in (5173, 5500, 3000, 4173)]
+app.add_middleware(CORSMiddleware, allow_origins=DEV_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 db.init()
 today = lambda: dt.date.today().isoformat()
 
 class SetIn(BaseModel): exercise: str; reps: int; weight: float; rpe: float | None = None
 class MetricIn(BaseModel): weight: float; height: float | None = None
-class FormIn(BaseModel): exercise: str = "squat"; reps: list[dict]
+class FormIn(BaseModel): exercise: str = Field(min_length=1); reps: list[dict]   # exercise is required: no silent squat default
 class RoutineIn(BaseModel): name: str; items: list[dict]
 class ChatIn(BaseModel): message: str
 class AnalyzeIn(BaseModel): before_id: int; after_id: int
+class IdentifyIn(BaseModel): frames: list[str] = Field(min_length=1, max_length=5)
 
 @app.get("/api/exercises")
 def exercises():
@@ -41,16 +46,29 @@ def add_metric(m: MetricIn):
 @app.post("/api/form")
 def add_form(f: FormIn):
     n = len(f.reps) or 1
+    flag_counts: dict[str, int] = {}
+    for r in f.reps:
+        for t in r.get("flags", []): flag_counts[t] = flag_counts.get(t, 0) + 1
     agg = {"rep_count": len(f.reps),
-           "depth_pct": round(100 * sum(r["depth_ok"] for r in f.reps) / n),
-           "torso_pct": round(100 * sum(r["torso_ok"] for r in f.reps) / n),
-           "avg_tempo_s": round(sum(r["tempo_s"] for r in f.reps) / n, 1),
-           "depth_by_rep": [r["depth_ok"] for r in f.reps], "reps": f.reps}
+           "depth_pct": round(100 * sum(r.get("depth_ok", 1) for r in f.reps) / n),    # % of reps reaching the target range
+           "torso_pct": round(100 * sum(r.get("torso_ok", 1) for r in f.reps) / n),    # % of reps with good posture
+           "avg_tempo_s": round(sum(r.get("tempo_s", 0) for r in f.reps) / n, 1),
+           "flags": flag_counts, "depth_by_rep": [r.get("depth_ok", 1) for r in f.reps], "reps": f.reps}
     score = round((agg["depth_pct"] + agg["torso_pct"]) / 2)
-    summary = coach.summarize_form(f.exercise, agg)
+    llm_agg = {k: v for k, v in agg.items() if k not in ("reps", "depth_by_rep")}      # compact input keeps the model call cheap
+    summary = coach.summarize_form(f.exercise, llm_agg)
     c = db.conn(); c.execute("INSERT INTO form_analysis(date,exercise,rep_count,score,metrics,summary) VALUES(?,?,?,?,?,?)",
         (today(), f.exercise, agg["rep_count"], score, json.dumps(agg), summary)); c.commit(); c.close()
-    return {"score": score, "summary": summary, **agg}
+    return {"score": score, "summary": summary, "exercise": f.exercise, **agg}
+
+@app.post("/api/identify")
+def identify(a: IdentifyIn):
+    if any(len(f) > 700_000 for f in a.frames): raise HTTPException(413, "Frames too large")
+    try:
+        key, raw = coach.identify_exercise(a.frames)
+    except Exception as e:
+        raise HTTPException(502, f"Exercise identification failed: {e}")
+    return {"exercise": key, "raw": raw}
 
 @app.post("/api/coach")
 def chat(m: ChatIn):
@@ -172,4 +190,19 @@ def dashboard():
     return {"weekly_volume": vol, "prs": prs, "weight": wt, "form": ft, "plateau": plateau, "bmi": bmi}
 
 app.mount("/uploads", StaticFiles(directory=UP), name="uploads")
-app.mount("/", StaticFiles(directory=os.path.join(ROOT, "frontend"), html=True), name="ui")
+# Stand-alone form-check page (formcheck.html + repCounter.js). Looks in a few likely places and logs what it found.
+# This mount must come BEFORE the "/" mount below, otherwise the catch-all would swallow the request.
+_fc_options = [os.path.join(ROOT, *p) for p in (("frontend", "formcheck"), ("frontend-ts", "formcheck"), ("frontend-ts", "public", "formcheck"), ("formcheck",))]
+_fc = next((d for d in _fc_options if os.path.isdir(d)), None)
+if _fc:
+    app.mount("/formcheck", StaticFiles(directory=_fc, html=True), name="formcheck")
+    print(f"[formcheck] serving {_fc}  ->  http://localhost:8000/formcheck/formcheck.html  (files: {', '.join(os.listdir(_fc))})")
+else:
+    print("[formcheck] folder NOT found. Looked in:\n  " + "\n  ".join(_fc_options))
+
+# Serve the first frontend build that exists: the TypeScript build, else the old plain HTML one.
+for _d in ("frontend-ts/dist", "frontend"):
+    _p = os.path.join(ROOT, _d)
+    if os.path.isdir(_p):
+        app.mount("/", StaticFiles(directory=_p, html=True), name="ui")
+        break

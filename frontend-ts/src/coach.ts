@@ -71,7 +71,7 @@ function scrollDown(): void {
 /* ---------- Messages ---------- */
 
 function addMessage(role: 'user' | 'coach'): Message {
-  $('chat-empty')?.remove();
+  document.getElementById('chat-empty')?.remove(); // not $(): that throws once the empty state is gone
   const row = document.createElement('div');
   row.className = `msg ${role}`;
 
@@ -146,7 +146,7 @@ async function ask(question: string): Promise<void> {
   try {
     await streamCoach(
       question,
-      (chunk) => {
+      (chunk: string) => {
         const stick = nearBottom(); // measure BEFORE appending, so growth doesn't fool the check
         text += chunk;
         reply.body.textContent = text;
