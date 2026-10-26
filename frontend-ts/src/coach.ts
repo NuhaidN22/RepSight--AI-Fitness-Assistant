@@ -236,7 +236,7 @@ export function initCoach(): void {
 
   $('chat').addEventListener('click', (ev) => {
     const target = ev.target;
-    if (!(target instanceof HTMLElement)) return;
+    if (!(target instanceof Element)) return;
     const chip = target.closest<HTMLElement>('[data-q]');
     if (chip?.dataset.q) void ask(chip.dataset.q);
   });

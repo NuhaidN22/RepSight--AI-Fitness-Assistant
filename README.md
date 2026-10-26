@@ -41,7 +41,7 @@ python -m venv .venv
 pip install -r requirements.txt
 copy .env.example .env              # then add your NEBIUS_API_KEY
 cd backend
-uvicorn main:app --reload --port 8000
+uvicorn main:app --port 8080
 
 # 2. Frontend (second terminal)
 cd frontend-ts
@@ -49,7 +49,7 @@ npm install
 npm run dev                         # open http://localhost:5173
 ```
 
-Vite forwards `/api` to the backend on port 8000. To serve everything from the backend instead, run `npm run build` in `frontend-ts` and open http://localhost:8000.
+Vite forwards `/api` to the backend on port 8080. To serve everything from the backend instead, run `npm run build` in `frontend-ts` and open http://localhost:8080.
 
 The camera works on `localhost` or https only. Uploading a video works anywhere.
 
@@ -63,7 +63,26 @@ Without an API key the app runs in demo mode: fallback summaries, no coach.
 | `NEBIUS_BASE_URL` | `https://api.tokenfactory.nebius.com/v1/` |
 | `COACH_MODEL` | Coach chat, e.g. `nvidia/nemotron-3-super-120b-a12b` |
 | `SUMMARY_MODEL` | Weekly and form summaries, e.g. `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | Email account that sends sign-up codes. For Gmail use `smtp.gmail.com`, port 587 and an app password. If these are empty, no email is sent and the code is printed in the backend terminal (development only). |
 | `VISION_MODEL` | Image-capable model, e.g. `google/gemma-3-27b-it` (the NVIDIA models on Nebius do not accept images) |
+
+## Deploying
+
+Local (private): frontend on `http://localhost:5173`, backend on `http://localhost:8080`.
+
+Public, free: the app runs on **Render** with its data in a free **Neon** Postgres database (the code uses SQLite locally and Postgres when `DATABASE_URL` is set). Sign-up codes go out through a small free Gmail relay, because Render's free tier blocks SMTP. Two other options (your PC through a Cloudflare tunnel, or your own server) are covered too. Step by step, with a checker script: [deploy/README.md](deploy/README.md).
+
+## Send real sign-up emails
+
+Until you do this, sign-up codes are only printed in the backend terminal (development mode).
+
+1. In the Google account that will send the codes, turn on **2-step verification**.
+2. Google Account, Security, **App passwords**: create one (16 letters). This is not your normal password.
+3. In `.env`, fill in `SMTP_USER` (that Gmail address) and `SMTP_PASSWORD` (the app password). `SMTP_HOST=smtp.gmail.com` and `SMTP_PORT=587` are already there; use 465 for SSL.
+4. Check it works: `python backend/send_test_email.py you@gmail.com`. It sends one message and explains any failure in plain words.
+5. Restart the backend. The startup line `[mail]` should say it is emailing through smtp.gmail.com.
+
+Any SMTP service works the same way (Brevo, SendGrid, Resend and others), by changing the `SMTP_*` values. Gmail allows roughly 500 sends a day.
 
 ## API
 

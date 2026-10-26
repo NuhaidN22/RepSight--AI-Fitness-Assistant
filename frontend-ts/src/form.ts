@@ -769,7 +769,7 @@ export function initForm(): void {
 
   $('bars').addEventListener('click', (ev) => {
     const target = ev.target;
-    if (!(target instanceof HTMLElement)) return;
+    if (!(target instanceof Element)) return;
     const bar = target.closest<HTMLElement>('[data-i]');
     if (!bar) return;
     selected = Number(bar.dataset.i);

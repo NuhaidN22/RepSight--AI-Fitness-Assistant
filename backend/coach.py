@@ -1,6 +1,7 @@
 import os, json, re, base64, mimetypes
 from openai import OpenAI
 from db import conn
+from security import unseal
 
 COACH_MODEL = os.getenv("COACH_MODEL", "nvidia/Nemotron-3-Nano-30B-A3B")
 SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", COACH_MODEL)
@@ -15,20 +16,24 @@ Ground every answer in the USER DATA below; cite specific numbers/dates. If data
 Guardrails: no medical diagnosis; for pain/injury advise seeing a professional; no extreme diets or crash weight loss;
 never estimate body-fat from photos. Keep answers under 150 words with 1-3 concrete actions."""
 
-def build_context():
+def build_context(uid, key):
+    """The signed-in user's own data only (every query is scoped by user_id)."""
     c = conn()
-    sets = [dict(r) for r in c.execute("SELECT date,exercise,reps,weight,rpe FROM set_log ORDER BY id DESC LIMIT 40")]
-    mets = [dict(r) for r in c.execute("SELECT date,weight,height FROM body_metric ORDER BY date DESC LIMIT 10")]
-    forms = [dict(r) for r in c.execute("SELECT date,exercise,rep_count,score,metrics,summary FROM form_analysis ORDER BY id DESC LIMIT 5")]
-    for f in forms: f["metrics"] = json.loads(f["metrics"])
+    sets = [dict(r) for r in c.execute("SELECT date,exercise,reps,weight,rpe FROM set_log WHERE user_id=? ORDER BY id DESC LIMIT 40", (uid,))]
+    mets = [dict(r) for r in c.execute("SELECT date,weight,height FROM body_metric WHERE user_id=? ORDER BY date DESC LIMIT 10", (uid,))]
+    forms = [dict(r) for r in c.execute("SELECT date,exercise,rep_count,score,metrics,summary FROM form_analysis WHERE user_id=? ORDER BY id DESC LIMIT 5", (uid,))]
+    for f in forms:
+        f["metrics"] = json.loads(unseal(key, f["metrics"]) or "{}"); f["summary"] = unseal(key, f["summary"])
+    me = c.execute("SELECT profile FROM app_user WHERE id=?", (uid,)).fetchone()
     c.close()
-    return json.dumps({"recent_sets": sets, "body_metrics": mets, "form_analyses": forms})
+    age = (json.loads(unseal(key, me["profile"]) or "{}").get("age") if me and me["profile"] else None)   # the phone number is never sent to the model
+    return json.dumps({"user_age": age, "recent_sets": sets, "body_metrics": mets, "form_analyses": forms})
 
-def stream_reply(history):
+def stream_reply(history, uid, key):
     cl = client()
     if not cl:
         yield "(Demo mode: set NEBIUS_API_KEY in .env to enable the coach.)"; return
-    msgs = [{"role": "system", "content": SYSTEM + "\n\nUSER DATA:\n" + build_context()}] + history[-10:]
+    msgs = [{"role": "system", "content": SYSTEM + "\n\nUSER DATA:\n" + build_context(uid, key)}] + history[-10:]
     for chunk in cl.chat.completions.create(model=COACH_MODEL, messages=msgs, stream=True, temperature=0.4, max_tokens=500):
         if chunk.choices and chunk.choices[0].delta.content:
             yield chunk.choices[0].delta.content
@@ -47,13 +52,13 @@ def summarize_form(exercise, agg):
     except Exception:
         return fallback
 
-def weekly_summary():
+def weekly_summary(uid, key):
     cl = client()
     if not cl: return "Demo mode: add NEBIUS_API_KEY to get an AI weekly summary."
     try:
         r = cl.chat.completions.create(model=SUMMARY_MODEL, max_tokens=250, temperature=0.3, messages=[
             {"role": "system", "content": SYSTEM},
-            {"role": "user", "content": "USER DATA:\n" + build_context() + "\n\nWrite my weekly training summary: volume/PR highlights, form trend, one thing to focus on next week."}])
+            {"role": "user", "content": "USER DATA:\n" + build_context(uid, key) + "\n\nWrite my weekly training summary: volume/PR highlights, form trend, one thing to focus on next week."}])
         return r.choices[0].message.content.strip()
     except Exception as e:
         return f"Summary unavailable: {e}"
@@ -65,17 +70,17 @@ Reliability: 1-2 sentences on whether lighting, background, camera distance, ang
 Next photo tip: one sentence on how to take a more comparable photo.
 Rules: never estimate body-fat percentage, weight or health conditions; no medical claims; mention training data only as 'consistent with', never as proof; be cautious and encouraging; under 110 words in total."""
 
-def _img_part(path):
-    mime = mimetypes.guess_type(path)[0] or "image/jpeg"
-    with open(path, "rb") as f: b = base64.b64encode(f.read()).decode()
+def _img_part(raw, mime):
+    b = base64.b64encode(raw).decode()
     return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b}"}}
 
-def compare_photos(before_path, after_path, d1, d2):
+def compare_photos(before, after, d1, d2, uid, key):
+    """before / after = (image bytes, mime type), already decrypted by the caller."""
     cl = client(); model = os.getenv("VISION_MODEL")
     if not cl: return "Demo mode: add your API key to .env to enable photo analysis."
     if not model: return "Set VISION_MODEL in .env to an image-capable model (see README), then restart the server."
-    content = [{"type": "text", "text": f"Photo 1 is BEFORE ({d1}). Photo 2 is AFTER ({d2}).\nTraining data: {build_context()}\nDescribe the visible changes."},
-               _img_part(before_path), _img_part(after_path)]
+    content = [{"type": "text", "text": f"Photo 1 is BEFORE ({d1}). Photo 2 is AFTER ({d2}).\nTraining data: {build_context(uid, key)}\nDescribe the visible changes."},
+               _img_part(*before), _img_part(*after)]
     r = cl.chat.completions.create(model=model, max_tokens=500, temperature=0.3,
         messages=[{"role": "system", "content": PHOTO_SYSTEM}, {"role": "user", "content": content}])
     txt = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()

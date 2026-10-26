@@ -2,11 +2,13 @@
 // Every screen imports functions from here instead of calling fetch() directly.
 
 // Where the backend lives. Set VITE_API_URL in a .env file to override (Vite only).
-// If this page is served BY the backend (port 8000), use "" so requests stay same-origin.
+// If this page is served BY the backend (port 8080), use "" so requests stay same-origin.
 const fromEnv = (import.meta as any).env?.VITE_API_URL as string | undefined;
-export const BASE: string = fromEnv ?? (location.port === "8000" ? "" : "http://localhost:8000");
+// Same-origin by default: the Vite dev server proxies /api to the backend, so the login cookie works without any CORS setup.
+export const BASE: string = fromEnv ?? "";
 
 // ---- Types: the shape of what the backend sends back ----
+export interface Country { code: string; name: string; dial: string; min: number; max: number }
 export interface Exercise { name: string; muscle: string }
 export interface SetLog { id: number; date: string; exercise: string; reps: number; weight: number; rpe: number | null }
 export interface Routine { id: number; name: string; items: { exercise: string; sets: number; reps: number }[] }
@@ -28,12 +30,14 @@ export interface Dashboard {
 
 // ---- Core helpers ----
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}/api/${path}`, init);
+  const res = await fetch(`${BASE}/api/${path}`, { credentials: "include", ...init });
   let body: any = null;
   try { body = await res.json(); } catch { /* empty or non-JSON body */ }
   if (!res.ok) {
+    if (res.status === 401 && !path.startsWith("auth/")) { window.dispatchEvent(new Event("auth-required")); }   // session ended: main.ts shows the login form
     const d = body?.detail;                                     // FastAPI puts error text in "detail"
-    throw new Error(typeof d === "string" ? d : d ? JSON.stringify(d) : `Request failed (${res.status})`);
+    const text = typeof d === "string" ? d : Array.isArray(d) ? d.map((e: { msg?: string }) => e.msg).filter(Boolean).join("; ") : d ? JSON.stringify(d) : "";
+    throw new Error(text || `Request failed (${res.status})`);
   }
   return body as T;
 }
@@ -43,6 +47,13 @@ const json = (method: string, data?: unknown): RequestInit => ({
 
 // ---- Endpoints ----
 export const api = {
+  me: () => request<{ username: string }>("auth/me"),
+  login: (username: string, password: string) => request<{ username: string }>("auth/login", json("POST", { username, password })),
+  countries: () => request<Country[]>("meta/countries"),
+  emailDomains: () => request<{ popular: string[]; known: string[] }>("meta/email-domains"),
+  signupStart: (f: { email: string; password: string; confirm_password: string; age: number; phone_country: string; phone: string }) => request<{ sent: true; dev: boolean }>("auth/signup/start", json("POST", f)),
+  signupVerify: (email: string, code: string, password: string) => request<{ username: string }>("auth/signup/verify", json("POST", { email, code, password })),
+  logout: () => request<{ ok: true }>("auth/logout", json("POST")),
   exercises: () => request<Exercise[]>("exercises"),
   sets: (exercise?: string) => request<SetLog[]>(exercise ? `sets?exercise=${encodeURIComponent(exercise)}` : "sets"),
   addSet: (s: { exercise: string; reps: number; weight: number; rpe?: number | null }) => request<{ ok: true }>("sets", json("POST", s)),
@@ -70,7 +81,8 @@ export const photoUrl = (path: string) => BASE + path;
 
 // The coach streams plain text, so it can't go through request<T>() (which waits for JSON).
 export async function streamCoach(message: string, onChunk: (text: string) => void, signal?: AbortSignal): Promise<void> {
-  const res = await fetch(`${BASE}/api/coach`, { ...json("POST", { message }), signal });
+  const res = await fetch(`${BASE}/api/coach`, { ...json("POST", { message }), signal, credentials: "include" });
+  if (res.status === 401) window.dispatchEvent(new Event("auth-required"));
   if (!res.ok || !res.body) throw new Error(`Coach request failed (${res.status})`);
   const reader = res.body.getReader(), dec = new TextDecoder();
   for (;;) {

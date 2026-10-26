@@ -5,7 +5,7 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   server: {
     proxy: {
-      '/api': 'http://127.0.0.1:8000', // change the port if your backend uses another one
+      '/api': 'http://127.0.0.1:8080', // the local backend: uvicorn main:app --port 8080
     },
   },
 });

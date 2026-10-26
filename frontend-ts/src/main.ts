@@ -4,6 +4,8 @@ import { initDashboard, refreshDashboard } from './dashboard';
 import { initForm, stopForm } from './form';
 import { initLog, refreshLog } from './log';
 import { initPhotos, refreshPhotos } from './photos';
+import { requireLogin } from './auth';
+import { api } from './api';
 import { initTheme } from './theme';
 import { $ } from './ui';
 
@@ -57,16 +59,25 @@ function show(id: TabId): void {
 }
 
 nav.addEventListener('click', (ev) => {
-  const target = ev.target;
-  if (!(target instanceof HTMLElement)) return;
-  const id = target.dataset.t as TabId | undefined;
+  // The button holds an icon and two text lines, so the click usually lands on one of those, not on the button itself.
+  const button = ev.target instanceof Element ? ev.target.closest<HTMLElement>('button[data-t]') : null;
+  const id = button?.dataset.t as TabId | undefined;
   if (id) show(id);
 });
 
 initTheme($<HTMLButtonElement>('theme'));
-initLog();
-initForm();
-initCoach();
-initDashboard();
-initPhotos();
-show('log');
+
+// Nothing is loaded until the user is signed in; if the session ends later, go back to the login form.
+window.addEventListener('auth-required', () => location.reload());
+$('logout').addEventListener('click', () => {
+  void api.logout().finally(() => location.reload());
+});
+void requireLogin().then((username) => {
+  $('who').textContent = username;
+  initLog();
+  initForm();
+  initCoach();
+  initDashboard();
+  initPhotos();
+  show('log');
+});

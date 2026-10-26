@@ -402,14 +402,14 @@ export function initLog(): void {
   $<HTMLFormElement>('set-form').addEventListener('submit', (e) => void onAddSet(e));
   $<HTMLFormElement>('set-form').addEventListener('click', (ev) => {
     const target = ev.target;
-    if (!(target instanceof HTMLElement)) return;
+    if (!(target instanceof Element)) return;
     const step = target.closest<HTMLElement>('[data-step]');
     if (step) onStep(step);
   });
   $<HTMLSelectElement>('ex').addEventListener('change', prefillFromHistory);
   $('rpe-pills').addEventListener('click', (ev) => {
     const target = ev.target;
-    if (!(target instanceof HTMLElement)) return;
+    if (!(target instanceof Element)) return;
     const pill = target.closest<HTMLElement>('[data-rpe]');
     if (!pill) return;
     const value = Number(pill.dataset.rpe);
@@ -423,7 +423,7 @@ export function initLog(): void {
 
   $('draft').addEventListener('click', (ev) => {
     const target = ev.target;
-    if (!(target instanceof HTMLElement)) return;
+    if (!(target instanceof Element)) return;
     const btn = target.closest<HTMLElement>('[data-rm]');
     if (!btn) return;
     draft.splice(Number(btn.dataset.rm), 1);
@@ -432,7 +432,7 @@ export function initLog(): void {
 
   $('routines').addEventListener('click', (ev) => {
     const target = ev.target;
-    if (!(target instanceof HTMLElement)) return;
+    if (!(target instanceof Element)) return;
     const del = target.closest<HTMLElement>('[data-del]');
     if (del) {
       void deleteRoutine(Number(del.dataset.del));

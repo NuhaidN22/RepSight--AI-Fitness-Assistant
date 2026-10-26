@@ -1,4 +1,5 @@
 import { api } from './api';
+import { shrinkImage } from './image';
 import { ICONS } from './icons';
 import type { Photo } from './types';
 import { $, confirmDialog, esc, messageOf, setBusy, toast } from './ui';
@@ -108,7 +109,7 @@ async function upload(slot: Slot): Promise<void> {
   const button = $<HTMLButtonElement>(`up-${slot}`);
   setBusy(button, true, 'Uploading…');
   try {
-    const result = await api.uploadPhoto(file, $<HTMLInputElement>(`pd-${slot}`).value || today());
+    const result = await api.uploadPhoto(await shrinkImage(file), $<HTMLInputElement>(`pd-${slot}`).value || today());
     if (typeof result.id === 'number') {
       if (slot === 'b') selB = result.id;
       else selA = result.id;
@@ -294,7 +295,7 @@ export function initPhotos(): void {
 
   $('tl').addEventListener('click', (ev) => {
     const target = ev.target;
-    if (!(target instanceof HTMLElement)) return;
+    if (!(target instanceof Element)) return;
     const pick = target.closest<HTMLElement>('[data-pick]');
     if (pick) {
       choose(Number(pick.dataset.id), pick.dataset.pick === 'b' ? 'b' : 'a');

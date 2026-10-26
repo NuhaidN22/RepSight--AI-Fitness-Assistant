@@ -1,0 +1,33 @@
+# Runs on the Nebius server: the API plus Caddy, which gets a free HTTPS certificate for API_DOMAIN automatically.
+#   cp deploy/.env.production.example deploy/.env.production   (then fill it in)
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/.env.production up -d --build
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file: .env.production
+    volumes:
+      - repsight_data:/data          # database + encrypted photos
+    restart: unless-stopped
+    expose:
+      - "8080"                       # reachable only from Caddy, never published to the internet
+
+  caddy:
+    image: caddy:2
+    depends_on: [app]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - API_DOMAIN=${API_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  repsight_data:
+  caddy_data:
+  caddy_config:

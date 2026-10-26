@@ -248,7 +248,7 @@ export function initDashboard(): void {
   // One delegated listener handles every "go to another tab" button and the retry button.
   $('dash').addEventListener('click', (ev) => {
     const target = ev.target;
-    if (!(target instanceof HTMLElement)) return;
+    if (!(target instanceof Element)) return;
     const go = target.closest<HTMLElement>('[data-go]');
     if (go?.dataset.go) goTab(go.dataset.go);
     if (target.closest('#dash-retry')) void refreshDashboard();

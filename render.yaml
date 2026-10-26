@@ -1,0 +1,44 @@
+# Render Blueprint: one free web service that serves the website and the API, using a free Neon Postgres database.
+# Render, New, Blueprint, pick this repo. Secrets (sync: false) are asked for once when the Blueprint is created.
+services:
+  - type: web
+    name: repsight
+    runtime: docker
+    plan: free
+    dockerfilePath: ./deploy/Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/meta/countries
+    autoDeployTrigger: commit
+    envVars:
+      - key: APP_ENV
+        value: production            # refuses to start without real email, so sign-up codes are never lost in a log
+      - key: TRUST_PROXY
+        value: cloudflare            # Render sits behind Cloudflare, which supplies the real visitor address
+      - key: FORCE_SECURE_COOKIES
+        value: "1"
+      - key: LOGOUT_ON_START
+        value: "0"                   # a free service sleeps and wakes; that must not log everyone out
+      - key: MAX_IMAGE_MB
+        value: "6"
+      - key: DATABASE_URL            # the Neon connection string (pooled), from the Neon dashboard
+        sync: false
+      - key: NEBIUS_API_KEY
+        sync: false
+      - key: NEBIUS_BASE_URL
+        value: https://api.tokenfactory.nebius.com/v1/
+      - key: COACH_MODEL
+        value: nvidia/nemotron-3-super-120b-a12b
+      - key: SUMMARY_MODEL
+        value: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B
+      - key: VISION_MODEL
+        value: google/gemma-3-27b-it
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER                # the Gmail address that sends sign-up codes
+        sync: false
+      - key: SMTP_PASSWORD            # a Gmail App password, not the normal password
+        sync: false
+      - key: SMTP_FROM
+        sync: false

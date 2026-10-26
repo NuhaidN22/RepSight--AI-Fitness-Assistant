@@ -479,3 +479,22 @@ nav button .nt{display:flex;flex-direction:column;align-items:flex-start;gap:1px
   .app.collapsed .brand-full,.app.collapsed .nt{display:block}
   .app.collapsed .brand-mini{display:none}
 }
+
+/* ---------- Login ---------- */
+.auth-overlay{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:16px;background:var(--page-bg,#000);overflow:auto}
+.auth-overlay[hidden]{display:none}
+.auth-card{width:min(400px,100%);display:grid;grid-template-columns:minmax(0,1fr);gap:12px;padding:26px}
+.auth-card h2{margin:0}
+.auth-card .brand{padding:0}
+.auth-card .field-inline{display:grid;grid-template-columns:minmax(0,1fr);gap:4px}
+.auth-card .field-inline input{width:100%}
+.whoami{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 8px;color:var(--mut);font-size:13px;margin-top:auto}
+.whoami #who{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--fg)}
+.sidebar .theme-btn{margin-top:0}
+.app.collapsed .sidebar:not(:hover):not(:focus-within) .whoami{display:none}
+@media (max-width:760px){.whoami{order:1;margin-top:0}}
+.auth-card .two-col{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);gap:12px}
+.auth-card .two-col[hidden],.auth-card .field-inline[hidden]{display:none}
+.auth-overlay{align-items:start;padding-top:max(16px,6vh)}
+.auth-card .phone-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
+.auth-card .field-inline[hidden]{display:none}
