@@ -813,7 +813,7 @@ def test_t17_startup_calls_it():
     assert "end_all_sessions()" in inspect.getsource(main).split("db.init()")[1].split("today =")[0], "main.py must sign everyone out at startup"
 
 
-# ---- T18 running behind Vercel and a reverse proxy -----------------------------------------
+# ---- T18 running behind a reverse proxy -----------------------------------------
 import json
 import re
 import subprocess
@@ -840,9 +840,9 @@ def test_t18_login_cookie_is_secure_when_forced(monkeypatch):
 
 
 def test_t18_a_configured_public_origin_may_write_and_a_stranger_may_not(alice, monkeypatch):
-    monkeypatch.setattr(main, "DEV_ORIGINS", main.DEV_ORIGINS + ["https://repsight.vercel.app"])
-    ok = alice.post("/api/sets", json={"exercise": "x", "reps": 1, "weight": 1}, headers={"Origin": "https://repsight.vercel.app"})
-    bad = alice.post("/api/sets", json={"exercise": "x", "reps": 1, "weight": 1}, headers={"Origin": "https://repsight.vercel.app.evil.com"})
+    monkeypatch.setattr(main, "DEV_ORIGINS", main.DEV_ORIGINS + ["https://repsight.example-host.dev"])
+    ok = alice.post("/api/sets", json={"exercise": "x", "reps": 1, "weight": 1}, headers={"Origin": "https://repsight.example-host.dev"})
+    bad = alice.post("/api/sets", json={"exercise": "x", "reps": 1, "weight": 1}, headers={"Origin": "https://repsight.example-host.dev.evil.com"})
     assert ok.status_code == 200 and bad.status_code == 403
 
 
@@ -857,24 +857,9 @@ def test_t18_production_refuses_to_start_without_email_or_public_address():
     assert r.returncode != 0 and "SMTP" in r.stderr, "production started in dev-mail mode"
     r = _import_main({**base, "SMTP_HOST": "smtp.fake.test", "SMTP_USER": "a@fake.test", "SMTP_PASSWORD": "x"})
     assert r.returncode == 0, "one shared address needs no ALLOWED_ORIGINS"
-    r = _import_main({**base, "SMTP_HOST": "smtp.fake.test", "SMTP_USER": "a@fake.test", "SMTP_PASSWORD": "x", "ALLOWED_ORIGINS": "https://repsight.vercel.app"})
+    r = _import_main({**base, "SMTP_HOST": "smtp.fake.test", "SMTP_USER": "a@fake.test", "SMTP_PASSWORD": "x", "ALLOWED_ORIGINS": "https://repsight.example-host.dev"})
     assert r.returncode == 0, r.stderr[-400:]
     assert _import_main({"APP_ENV": ""}).returncode == 0, "local development must still start without any of this"
-
-
-def test_t18_vercel_config_is_valid_and_its_csp_matches_the_page():
-    cfg = json.loads((ROOT / "frontend-ts" / "vercel.json").read_text(encoding="utf8"))
-    dest = cfg["rewrites"][0]["destination"]
-    assert cfg["rewrites"][0]["source"] == "/api/:path*" and dest.startswith("https://") and dest.endswith("/api/:path*"), dest
-    headers = {h["key"]: h["value"] for h in cfg["headers"][0]["headers"]}
-    assert headers["X-Frame-Options"] == "DENY" and "Strict-Transport-Security" in headers and headers["X-Content-Type-Options"] == "nosniff"
-    csp = headers["Content-Security-Policy"]
-    page = (ROOT / "frontend-ts" / "index.html").read_text(encoding="utf8")
-    import base64, hashlib
-    for body in re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", page, re.S):
-        digest = "sha256-" + base64.b64encode(hashlib.sha256(body.encode()).digest()).decode()
-        assert digest in csp, "the page's inline script is not allowed by the Vercel CSP: update the hash in vercel.json"
-    assert "'unsafe-inline'" not in csp.split("script-src")[1].split(";")[0] and "frame-ancestors 'none'" in csp
 
 
 def test_t18_nothing_secret_ships_in_the_deploy_kit():
@@ -887,7 +872,7 @@ def test_t18_nothing_secret_ships_in_the_deploy_kit():
 
 def test_t18_preflight_refuses_the_unedited_example_settings():
     r = subprocess.run([sys.executable, str(ROOT / "deploy" / "preflight.py"), str(ROOT / "deploy" / ".env.production.example")], capture_output=True, text=True)
-    assert r.returncode == 1 and "REPLACE-WITH-API-DOMAIN" in r.stdout and "no email set up" in r.stdout
+    assert r.returncode == 1 and "no email set up" in r.stdout and "NEBIUS_API_KEY is empty" in r.stdout
     assert "nvapi" not in r.stdout, "preflight must never print secrets"
 
 

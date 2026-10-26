@@ -18,7 +18,7 @@ MAX_IMAGE = int(float(os.getenv("MAX_IMAGE_MB", "6" if db.IS_PG else "10")) * 1_
 app = FastAPI(title="RepSight", docs_url=None, redoc_url=None, openapi_url=None)  # no public API explorer
 # Allow the separately-served frontend (Vite, Live Server, ...) to call this API from the browser.
 DEV_ORIGINS = [f"http://{h}:{p}" for h in ("localhost", "127.0.0.1") for p in (5173, 5500, 3000, 4173, 8080)]
-# Public web addresses allowed to call this API (comma-separated in .env, e.g. https://repsight.vercel.app). Empty for local use only.
+# Public web addresses allowed to call this API (comma-separated in .env, e.g. https://app.yourdomain.com), only needed when the website is served from a different address than this API.
 DEV_ORIGINS += [o.strip().rstrip("/") for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=DEV_ORIGINS, allow_methods=["*"], allow_headers=["*"], allow_credentials=True)
 if os.getenv("RENDER") and not db.IS_PG:
@@ -33,7 +33,7 @@ print("[mail]", mailer.describe())
 if os.getenv("APP_ENV") == "production":
     # Fail closed: in production a missing mail setup would mean sign-up codes get printed in server logs instead of emailed.
     if not mailer.configured(): raise RuntimeError("APP_ENV=production but no email is set up (SMTP_HOST, SMTP_USER and SMTP_PASSWORD, or MAIL_WEBHOOK_URL and MAIL_WEBHOOK_SECRET): refusing to start")
-    if not os.getenv("ALLOWED_ORIGINS"): print("[cors] ALLOWED_ORIGINS is empty: only pages served from this same address may use the API (right for a single address; set it if the website is on Vercel)")
+    if not os.getenv("ALLOWED_ORIGINS"): print("[cors] ALLOWED_ORIGINS is empty: only pages served from this same address may use the API (right for a single address; set it only if the website is on a different address)")
 today = lambda: dt.date.today().isoformat()
 
 _csp_cache: dict = {}

@@ -1,9 +1,8 @@
 """Run this before going public. It checks the deployment files for placeholders and missing values, and never prints a secret.
 
-    python deploy/preflight.py                 # checks deploy/.env.production and frontend-ts/vercel.json
+    python deploy/preflight.py                 # checks deploy/.env.production
     python deploy/preflight.py path/to/env     # check a different env file
 """
-import json
 import re
 import sys
 from pathlib import Path
@@ -17,18 +16,6 @@ ok: list[str] = []
 def check(condition: bool, good: str, bad: str) -> None:
     (ok if condition else problems).append(good if condition else bad)
 
-
-# ---- Vercel config (only checked where the website files exist, e.g. on your own computer) ----
-vercel_file = ROOT / "frontend-ts" / "vercel.json"
-if vercel_file.exists():
-    cfg = json.loads(vercel_file.read_text(encoding="utf8"))
-    dest = cfg["rewrites"][0]["destination"]
-    check("REPLACE" not in dest and dest.startswith("https://"), f"vercel.json forwards /api to {dest.split('/api')[0]}",
-          "frontend-ts/vercel.json still has REPLACE-WITH-API-DOMAIN: put your API address there")
-    csp = next(h["value"] for h in cfg["headers"][0]["headers"] if h["key"] == "Content-Security-Policy")
-    check("sha256-REPLACE" not in csp, "vercel.json CSP has the inline-script hash", "vercel.json CSP still has sha256-REPLACE")
-else:
-    print("  skip   vercel.json is not on this machine (run this checker on your own computer to check it too)")
 
 # ---- server settings ----
 if not env_path.exists():

@@ -1,5 +1,5 @@
 # Runs RepSight on your own PC and gives it a free public https address through a Cloudflare tunnel.
-# The backend also serves the website, so this one address is the whole app: no Vercel, no server, no cost.
+# The backend also serves the website, so this one address is the whole app: no server and no cost.
 #
 #   1. one-time:   winget install --id Cloudflare.cloudflared      (then open a new PowerShell)
 #   2. fill SMTP_USER and SMTP_PASSWORD in .env (Gmail app password) so sign-up codes are really emailed

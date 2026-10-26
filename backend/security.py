@@ -254,7 +254,7 @@ def rate_limit(bucket: str, who: str, limit: int, per_seconds: int = 60) -> None
 
 
 def client_ip(request: Request) -> str:
-    """The visitor's address, used for rate limits. Behind Vercel and a reverse proxy every request arrives from the proxy, so with
+    """The visitor's address, used for rate limits. Behind a reverse proxy (Render, Cloudflare, Caddy) every request arrives from the proxy, so with
     TRUST_PROXY=1 the first address in X-Forwarded-For (the real visitor) is used instead. Never turn it on when the app is reachable directly."""
     mode = os.getenv("TRUST_PROXY")
     if mode == "cloudflare":  # a Cloudflare tunnel: only Cloudflare can reach the app, and it sets this header to the real visitor
