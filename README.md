@@ -1,34 +1,66 @@
 # RepSight
 
-An AI coach that watches your form and learns from your training data. Built for the NVIDIA x Nebius hackathon.
+**An AI coach that watches your form and learns from your own training data.**
+Built for the NVIDIA x Nebius hackathon.
 
-- **Log** workouts and build routines.
-- **Kinetiq** (form check): upload a video or use the camera. Pose tracking runs in your browser, counts reps and gives plain-language feedback.
-- **Sinew** (coach chat): Axon, our NVIDIA Nemotron model on Nebius, answers using your own logs, body metrics and form results.
-- **Dashboard**: weekly volume, PRs, bodyweight and BMI, form score trend, plateau flag and an AI weekly summary.
-- **Progress photos**: Before/After timeline, compare slider and a cautious AI comparison (no body-fat estimates).
+**Live demo: https://repsight.onrender.com**
+It runs on a free server that sleeps when idle, so the first load can take about a minute. Sign-up sends a real email code, so use an address you can open.
 
-## How it works
+| | |
+| --- | --- |
+| **Kinetiq** | Film a set or upload a clip. Pose tracking runs in your browser, counts reps, flags form problems and writes plain-language feedback. |
+| **Sinew** | An AI strength coach (NVIDIA Nemotron on Nebius) that answers from *your* logged sets, body metrics and form results. |
+| **Log + Dashboard** | Sets, routines, weekly volume, personal records, bodyweight and BMI, form-score trend, plateau detection and an AI weekly summary. |
+| **Photos** | Before/after timeline with a compare slider and a cautious AI comparison (never body-fat estimates). |
+
+## Screenshots
+
+| Sign-up | Log | Kinetiq |
+| --- | --- | --- |
+| ![Sign-up](docs/screenshots/login.png) | ![Log](docs/screenshots/log.png) | ![Kinetiq](docs/screenshots/kinetiq.png) |
+
+| Sinew (coach) | Dashboard | Photos |
+| --- | --- | --- |
+| ![Sinew](docs/screenshots/sinew.png) | ![Dashboard](docs/screenshots/dashboard.png) | ![Photos](docs/screenshots/photos.png) |
+
+## How the AI is used
+
+| Where | Model | Runs on | What it does |
+| --- | --- | --- | --- |
+| Sinew coach chat | **NVIDIA Nemotron 3 Super 120B** (`nvidia/nemotron-3-super-120b-a12b`) | Nebius Token Factory | Answers using the user's own data, streamed |
+| Form and weekly summaries | **NVIDIA Nemotron 3 Nano 30B** (`NVIDIA-Nemotron-3-Nano-30B-A3B`) | Nebius Token Factory | Turns rep numbers into 2 to 3 sentences of feedback |
+| Exercise detection, photo comparison | Google Gemma 3 27B (`google/gemma-3-27b-it`) | Nebius Token Factory | The only image-capable model used (the NVIDIA models on Nebius do not accept images) |
+| Pose and rep counting | MediaPipe BlazePose (full / heavy) | **In your browser** | 33 body points per frame; the video never leaves your device |
+
+## Architecture
 
 ```
-Browser (frontend-ts, Vite + TypeScript)
- ├─ MediaPipe PoseLandmarker (BlazePose full/heavy), runs on-device
+Browser (Vite + TypeScript)
+ ├─ MediaPipe PoseLandmarker (BlazePose), on-device
  ├─ repCounter.ts: rep counting + per-exercise form rules on 3D joint angles
- └─ tracks one person at a time; tap the video to choose who
+ └─ follows one person at a time; tap the video to choose who
         │  JSON /api/*  (+ streamed text for the coach)
-FastAPI (backend/) ── SQLite (app.db) + uploads/ (photos)
-        │  OpenAI-compatible SDK
-Nebius Token Factory
- ├─ Axon = NVIDIA Nemotron: Sinew coach chat, weekly and form summaries
- └─ Gemma 3 27B: names the exercise from 3 still frames; compares progress photos
+FastAPI (backend/)  ── serves the website and the API
+ ├─ PostgreSQL (Neon) in production, SQLite locally: accounts, workouts, encrypted photos
+ ├─ Nebius Token Factory (Nemotron, Gemma) over an OpenAI-compatible API
+ └─ Brevo web API: sign-up codes by email
+Hosting: Render (free web service, Docker) + Neon (free Postgres) + Brevo (free email)
 ```
 
-**Kinetiq in detail**
-- Pose gives joint positions only. A hysteresis state machine on one joint angle decides what a rep is.
-- Presets: squat, deadlift/hinge, push-up, chest press, biceps curl, dumbbell raise, overhead press. Pick one from the dropdown, or leave it on Auto.
-- On Auto, a vision model names the exercise from three frames. If that fails, the app falls back to locking onto the joint that moves the most. Knee and hip only count when the torso actually moves.
-- Posture flags (torso lean, elbow drift, body line) are measured only on side-on frames.
-- Per-rep results go to the backend, which counts the flags and has the LLM write a short summary for that exercise.
+### Kinetiq in detail
+- Pose gives joint positions only. A hysteresis state machine on one joint angle decides what a rep is, using 3D angles so the camera angle matters less.
+- Presets: squat, deadlift/hinge, push-up, chest press, biceps curl, dumbbell raise, overhead press. Leave it on **Auto** and a vision model names the exercise from three frames.
+- Posture flags (torso lean, elbow drift, body line) are measured on side-on frames. Per-rep results go to the backend, which counts the flags and has the language model write the summary.
+- With several people in frame it follows one; click a person to switch.
+
+## Security and privacy
+
+- **Accounts:** email plus a 6-digit code sent to the address (with DNS, typo and placeholder-domain checks), passwords hashed with scrypt, 14-day sessions in an HttpOnly cookie.
+- **Per-user encryption:** every user has their own data key, stored only wrapped by their password. Photos, coach chats, form results, age and phone are encrypted with it. Workout numbers stay readable by the database owner (the dashboard queries need them) but every row is tied to its owner and every query is scoped.
+- **Hardening:** rate limits, cross-site request checks, a Content-Security-Policy, input limits, real image-type checks, generic error messages, and a production mode that refuses to start without working email or a database.
+- **What leaves your device:** nothing during pose tracking. On Auto, three small still frames go to the vision model. A photo goes to the vision model only when you press Analyze. The coach sees your age and training data, never your phone number.
+- **Your data:** `DELETE /api/data` wipes your data; `DELETE /api/account` removes the account.
+- **Tested:** 118 automated tests (`tests/`), run against both SQLite and PostgreSQL, cover access control, user separation, uploads, injection, encryption at rest, sign-up, rate limits and deployment settings.
 
 ## Run locally
 
@@ -49,64 +81,52 @@ npm install
 npm run dev                         # open http://localhost:5173
 ```
 
-Vite forwards `/api` to the backend on port 8080. To serve everything from the backend instead, run `npm run build` in `frontend-ts` and open http://localhost:8080.
+Vite forwards `/api` to the backend on port 8080. Or run `npm run build` in `frontend-ts` and open http://localhost:8080.
 
-The camera works on `localhost` or https only. Uploading a video works anywhere.
+Without email settings, sign-up codes are printed in the backend terminal (development only). The camera works on `localhost` or https; uploading a video works anywhere.
 
-Without an API key the app runs in demo mode: fallback summaries, no coach.
+### Tests
+```powershell
+pip install pytest httpx
+pytest tests                                    # SQLite
+$env:DATABASE_URL="postgresql://..."; pytest tests   # PostgreSQL
+```
 
 ## Configuration (`.env`)
 
 | Variable | Purpose |
 | --- | --- |
-| `NEBIUS_API_KEY` | Nebius Token Factory key. Never commit it. |
-| `NEBIUS_BASE_URL` | `https://api.tokenfactory.nebius.com/v1/` |
-| `COACH_MODEL` | Coach chat, e.g. `nvidia/nemotron-3-super-120b-a12b` |
-| `SUMMARY_MODEL` | Weekly and form summaries, e.g. `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | Email account that sends sign-up codes. For Gmail use `smtp.gmail.com`, port 587 and an app password. If these are empty, no email is sent and the code is printed in the backend terminal (development only). |
-| `VISION_MODEL` | Image-capable model, e.g. `google/gemma-3-27b-it` (the NVIDIA models on Nebius do not accept images) |
+| `NEBIUS_API_KEY`, `NEBIUS_BASE_URL` | Nebius Token Factory key and endpoint (`https://api.tokenfactory.nebius.com/v1/`). Never commit the key. |
+| `COACH_MODEL`, `SUMMARY_MODEL`, `VISION_MODEL` | Model names (see the table above) |
+| `DATABASE_URL` | Postgres address (Neon). Empty means a local SQLite file. |
+| `BREVO_API_KEY`, `BREVO_SENDER_EMAIL` | Email through Brevo's web API (works on hosts that block SMTP) |
+| `SMTP_*` | Or email over SMTP, for example Gmail with an app password |
+
+`python backend/send_test_email.py you@gmail.com` sends one test email and explains any failure. More settings (production, proxies, photo size) are in [deploy/README.md](deploy/README.md).
 
 ## Deploying
 
-Local (private): frontend on `http://localhost:5173`, backend on `http://localhost:8080`.
-
-Public, free: the app runs on **Render** with its data in a free **Neon** Postgres database (the code uses SQLite locally and Postgres when `DATABASE_URL` is set). Sign-up codes go out through a small free Gmail relay, because Render's free tier blocks SMTP. Two other options (your PC through a Cloudflare tunnel, or your own server) are covered too. Step by step, with a checker script: [deploy/README.md](deploy/README.md).
-
-## Send real sign-up emails
-
-Until you do this, sign-up codes are only printed in the backend terminal (development mode).
-
-1. In the Google account that will send the codes, turn on **2-step verification**.
-2. Google Account, Security, **App passwords**: create one (16 letters). This is not your normal password.
-3. In `.env`, fill in `SMTP_USER` (that Gmail address) and `SMTP_PASSWORD` (the app password). `SMTP_HOST=smtp.gmail.com` and `SMTP_PORT=587` are already there; use 465 for SSL.
-4. Check it works: `python backend/send_test_email.py you@gmail.com`. It sends one message and explains any failure in plain words.
-5. Restart the backend. The startup line `[mail]` should say it is emailing through smtp.gmail.com.
-
-Any SMTP service works the same way (Brevo, SendGrid, Resend and others), by changing the `SMTP_*` values. Gmail allows roughly 500 sends a day.
+The live site runs free on **Render** with a **Neon** database and **Brevo** email. Step by step, with a checker script and two alternatives (your PC through a Cloudflare tunnel, or your own server): [deploy/README.md](deploy/README.md).
 
 ## API
 
 | Area | Endpoints |
 | --- | --- |
+| Accounts | `POST /api/auth/signup/start`, `/signup/verify`, `/login`, `/logout`, `GET /api/auth/me`, `DELETE /api/account` |
 | Workouts | `GET /api/exercises`, `GET`/`POST /api/sets`, `POST /api/metrics` |
 | Routines | `GET`/`POST /api/routines`, `DELETE /api/routines/{id}` |
 | Dashboard | `GET /api/dashboard`, `GET /api/summary` |
-| Form check | `POST /api/form`, `POST /api/identify` |
-| Coach | `POST /api/coach` (streamed) |
-| Photos | `GET`/`POST /api/photos`, `DELETE /api/photos[/{id}]`, `POST /api/photos/analyze` |
+| Kinetiq | `POST /api/form`, `POST /api/identify` |
+| Sinew | `POST /api/coach` (streamed) |
+| Photos | `GET`/`POST /api/photos`, `GET /api/photos/{id}/file`, `DELETE /api/photos[/{id}]`, `POST /api/photos/analyze` |
+| Reference data | `GET /api/meta/countries`, `GET /api/meta/email-domains` |
 | Reset | `DELETE /api/data` |
 
-## Privacy
+## Honest limits
 
-- Pose tracking and rep counting run in your browser.
-- On **Auto**, three small still frames are sent to the vision model to name the exercise. Pick an exercise yourself and nothing is sent.
-- Progress photos are sent to the vision model only when you press Analyze.
-- `DELETE /api/data` wipes everything stored.
-
-## Limits
-
-- Single user, no login.
-- Rep counting and form thresholds are starting estimates and have not been validated against labelled clips.
-- Works best with a mostly side-on camera at about chest height and the whole body in frame. Machine exercises are partly hidden, so pick the exercise manually.
-- Shrugs are not supported yet, and the app does not detect the dumbbell, bar or machine, only the body.
+- Rep counting and form thresholds are starting estimates and have **not** been validated against labelled clips.
+- It works best with a mostly side-on camera at about chest height and the whole body in frame. Machine exercises hide part of the body, so pick the exercise manually.
+- Shrugs are not supported, and the app tracks the body only: it does not detect the dumbbell, bar or machine.
+- The free hosting sleeps after 15 minutes idle. Sign-up emails from a Gmail sender can land in spam until a domain you own is verified with the email provider.
+- A developer with access to the running server can see more than users might expect: workout numbers are not encrypted, and the server holds a user's key while they are logged in.
 - Coaching suggestions, not medical advice. No body-fat estimates.
