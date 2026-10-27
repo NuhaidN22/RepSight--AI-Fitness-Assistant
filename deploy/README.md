@@ -18,12 +18,12 @@ Local development is separate: frontend `http://localhost:5173`, backend `http:/
 browser ──https──▶ Render (free web service: website + API, in one Docker image)
                       ├──▶ Neon (free Postgres: accounts, workouts, encrypted photos)
                       ├──▶ Nebius Token Factory (the AI models)
-                      └──▶ your mail relay (Google Apps Script, sends sign-up codes from your Gmail)
+                      └──▶ Brevo (free email service, sends the sign-up codes)
 ```
 
 Why these parts:
 - **Neon** keeps your data. Render's own free disk is erased on every restart and sleep, and its free database is deleted after 30 days, so the app refuses to start on Render without a `DATABASE_URL` rather than silently lose accounts.
-- **The mail relay** is needed because **Render's free tier blocks the ports used for SMTP email (25, 465, 587)**, so Gmail SMTP cannot work there. The relay is a small Google Apps Script that sends from your own Gmail over https.
+- **Brevo** sends the sign-up emails over a web API, because **Render's free tier blocks the ports used for SMTP email (25, 465, 587)**, so Gmail SMTP cannot work there. Brevo's free plan allows 300 emails a day. If Brevo will not work for you, `mail-relay.gs` (a free Google Apps Script that sends from your own Gmail) is the fallback.
 
 ### Step 1: The database (Neon, about 3 minutes)
 1. Sign up at **neon.com** (GitHub or Google login).
@@ -32,8 +32,18 @@ Why these parts:
 
 Neon's free plan (their docs): 1 GB storage, 100 compute-hours a month, and the database itself sleeps after 5 minutes of inactivity and wakes by itself on the next request.
 
-### Step 2: The mail relay (Google Apps Script, about 3 minutes)
-Follow the comments at the top of [`mail-relay.gs`](mail-relay.gs). You end with two values: the web app URL (ends in `/exec`) and the secret you chose. They become `MAIL_WEBHOOK_URL` and `MAIL_WEBHOOK_SECRET`. A normal Gmail account can send about 100 codes a day this way.
+### Step 2: Email (Brevo, about 10 minutes)
+1. Sign up at **brevo.com** (free plan) and finish the account questions. A new account may be checked before it can send; if so, wait for the approval email.
+2. Add a sender: open the account menu, **Senders, Domains & Dedicated IPs**, **Senders**, **Add a sender**. Use your Gmail address as the email and `RepSight` as the name. Brevo emails you a code to verify it.
+3. Make an API key: account menu, **SMTP & API**, **API Keys**, **Generate a new API key**. Copy it now (it starts with `xkeysib-` and is shown once).
+4. These become `BREVO_API_KEY` and `BREVO_SENDER_EMAIL` (the verified sender). Test them from your PC before using Render:
+   ```powershell
+   $env:BREVO_API_KEY = "<the key>"; $env:BREVO_SENDER_EMAIL = "<the verified sender>"
+   python backend/send_test_email.py yourotheraddress@gmail.com
+   ```
+   It says "Sent" and the email arrives (check spam). If Brevo refuses the sender, the message says so: a Gmail sender may not be accepted. Then use the fallback, `mail-relay.gs`: the instructions are at the top of that file, and its two values go in `MAIL_WEBHOOK_URL` and `MAIL_WEBHOOK_SECRET`.
+
+I have not used Brevo's current screens or confirmed that it accepts a Gmail address as the sender; the steps above come from its API documentation, so menu names may differ slightly.
 
 ### Step 3: Put the code on GitHub
 Render builds from your GitHub repo, so the latest work must be pushed (including `render.yaml` and the `deploy` folder).
@@ -44,8 +54,8 @@ Render builds from your GitHub repo, so the latest work must be pushed (includin
 3. It asks for the secret values once. Fill in:
    - `DATABASE_URL`: the Neon string from step 1
    - `NEBIUS_API_KEY`: your Token Factory key
-   - `MAIL_WEBHOOK_URL` and `MAIL_WEBHOOK_SECRET`: from step 2
-   - `SMTP_*`: leave empty (not used on Render's free tier)
+   - `BREVO_API_KEY` and `BREVO_SENDER_EMAIL`: from step 2
+   - `MAIL_WEBHOOK_URL` and `MAIL_WEBHOOK_SECRET`: leave empty unless you use the Google script instead
 4. Click **Apply**. The first build takes a few minutes. When it says **Live**, open the address Render shows (`https://repsight.onrender.com` or similar).
 
 ### Step 5: Test it like a user
@@ -111,7 +121,8 @@ SMTP works here, so Gmail with an app password is fine (or use the relay). Add `
 | `LOGOUT_ON_START` | `1` (default): a restart logs everyone out. `0` on hosts that sleep and wake. |
 | `MAX_IMAGE_MB` | Photo size cap (6 on Postgres, 10 on SQLite by default). |
 | `ALLOWED_ORIGINS` | Only if the website is on a different address from the API. Empty when they share one. |
-| `MAIL_WEBHOOK_URL` / `MAIL_WEBHOOK_SECRET` | The web mail relay (for Render's free tier). |
+| `BREVO_API_KEY` / `BREVO_SENDER_EMAIL` / `BREVO_SENDER_NAME` | Brevo's web API (works on Render's free tier). Tried first. |
+| `MAIL_WEBHOOK_URL` / `MAIL_WEBHOOK_SECRET` | The Google Apps Script web relay (fallback for Render's free tier). |
 | `SMTP_*` | Direct email over SMTP (your PC or your own server). |
 
 ## Checker
@@ -123,9 +134,9 @@ SMTP works here, so Gmail with an app password is fine (or use the relay). Add `
 Tested (local machine, 2026-10-26):
 - The full test suite passes on both SQLite and a real PostgreSQL 16 (Docker).
 - The Docker image (website build included) builds, and runs as an ordinary user on Render's port with the Render settings: refuses to start without `DATABASE_URL`, creates its tables in Postgres, stores photos encrypted in the database, keeps logins and data across a stop and start, limits wrong logins per visitor address, and caps photo size.
-- The mail relay code against a fake relay that behaves like Apps Script, including its redirect.
+- The Brevo code against a fake Brevo server (key and sender sent correctly, a wrong key and an unverified sender give a clear reason, the key is never shown), and the Google relay code against a fake that behaves like Apps Script, including its redirect.
 
-Not tested: Render itself, Neon itself (Postgres 16 in Docker stands in), the real Apps Script relay, real emails, UptimeRobot, a real domain. The first real deploy is the real test, so follow step 5 above.
+Not tested: Render itself, Neon itself (Postgres 16 in Docker stands in), the real Brevo and Apps Script services, real emails, UptimeRobot, a real domain. The first real deploy is the real test, so follow step 5 above.
 
 ## Known limits
 

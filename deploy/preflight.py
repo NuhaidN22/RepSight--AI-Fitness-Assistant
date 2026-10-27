@@ -27,10 +27,11 @@ else:
             key, _, value = line.partition("=")
             values[key.strip()] = value.strip()
     check(bool(values.get("NEBIUS_API_KEY")), "NEBIUS_API_KEY is set", "NEBIUS_API_KEY is empty")
+    brevo = all(values.get(k) for k in ("BREVO_API_KEY", "BREVO_SENDER_EMAIL"))
     smtp = all(values.get(k) for k in ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD"))
     relay = all(values.get(k) for k in ("MAIL_WEBHOOK_URL", "MAIL_WEBHOOK_SECRET"))
-    check(smtp or relay, "email is set up (" + ("web relay" if relay else "SMTP") + ")",
-          "no email set up: fill SMTP_HOST, SMTP_USER and SMTP_PASSWORD, or MAIL_WEBHOOK_URL and MAIL_WEBHOOK_SECRET (Render's free tier blocks SMTP: use the relay)")
+    check(brevo or smtp or relay, "email is set up (" + ("Brevo" if brevo else "web relay" if relay else "SMTP") + ")",
+          "no email set up: fill BREVO_API_KEY and BREVO_SENDER_EMAIL, or MAIL_WEBHOOK_URL and MAIL_WEBHOOK_SECRET, or SMTP_HOST, SMTP_USER and SMTP_PASSWORD (Render's free tier blocks SMTP: use Brevo or the relay)")
     if relay:
         check(values["MAIL_WEBHOOK_URL"].startswith("https://") and len(values["MAIL_WEBHOOK_SECRET"]) >= 20, "web relay URL is https and its secret is long enough",
               "MAIL_WEBHOOK_URL must start with https:// and MAIL_WEBHOOK_SECRET needs at least 20 characters")

@@ -31,6 +31,11 @@ function doPost(e) {
   }
 }
 
+// Opening the web app URL in a browser shows this: a quick way to check the deployment is live. It sends nothing and reveals nothing.
+function doGet() {
+  return reply({ ok: true, service: 'RepSight mail relay', note: 'alive; RepSight POSTs messages to this address' });
+}
+
 function reply(object) {
   return ContentService.createTextOutput(JSON.stringify(object)).setMimeType(ContentService.MimeType.JSON);
 }

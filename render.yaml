@@ -32,13 +32,13 @@ services:
         value: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B
       - key: VISION_MODEL
         value: google/gemma-3-27b-it
-      - key: SMTP_HOST
-        value: smtp.gmail.com
-      - key: SMTP_PORT
-        value: "587"
-      - key: SMTP_USER                # the Gmail address that sends sign-up codes
+      - key: BREVO_API_KEY            # from Brevo: SMTP & API, API Keys (starts with xkeysib-)
         sync: false
-      - key: SMTP_PASSWORD            # a Gmail App password, not the normal password
+      - key: BREVO_SENDER_EMAIL       # a sender you verified in Brevo (Senders, Domains & Dedicated IPs)
         sync: false
-      - key: SMTP_FROM
+      - key: BREVO_SENDER_NAME
+        value: RepSight
+      - key: MAIL_WEBHOOK_URL         # optional fallback: the Google Apps Script relay (deploy/mail-relay.gs)
+        sync: false
+      - key: MAIL_WEBHOOK_SECRET
         sync: false

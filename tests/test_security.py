@@ -972,10 +972,107 @@ def test_t19_unreachable_relay_gives_a_helpful_reason(anon, relay, monkeypatch):
     r = start(anon, "down@gmail.com")
     assert r.status_code == 502
     import urllib.error
-    assert "Could not reach the web relay" in mailer.explain(urllib.error.URLError("refused"))
+    assert "Could not reach the mail service" in mailer.explain(urllib.error.URLError("refused"))
 
 
 def test_t19_the_relay_script_ships_with_the_safety_checks():
     gs = (ROOT / "deploy" / "mail-relay.gs").read_text(encoding="utf8")
     assert "data.secret !== secret" in gs and "secret.length < 20" in gs and "bad address" in gs and "MailApp.sendEmail" in gs
     assert "AIza" not in gs and "https://script.google.com/macros/s/" not in gs, "no real URL or key may be committed"
+
+
+# ---- T20 email through Brevo's web API (works on hosts that block SMTP) ---------------------------
+class _FakeBrevo(http.server.BaseHTTPRequestHandler):
+    seen: list = []
+    key = "xkeysib-test-key-0123456789"
+    mode = "ok"            # ok | bad_sender | rate
+
+    def log_message(self, *a): pass
+
+    def do_POST(self):
+        body = _json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if self.headers.get("api-key") != self.key:
+            return self._answer(401, {"code": "unauthorized", "message": "Key not found"})
+        if _FakeBrevo.mode == "ip_block":
+            return self._answer(401, {"code": "unauthorized", "message": "We have detected you are using an unrecognised IP address 2001:db8::1. If you performed this action make sure to authorize it"})
+        if _FakeBrevo.mode == "bad_sender":
+            return self._answer(400, {"code": "invalid_parameter", "message": "Sender is not valid or not verified"})
+        _FakeBrevo.seen.append({"headers": {k.lower(): v for k, v in self.headers.items()}, "body": body})
+        self._answer(201, {"messageId": "<fake@brevo>"})
+
+    def _answer(self, status, data):
+        raw = _json.dumps(data).encode()
+        self.send_response(status); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(raw)
+
+
+@pytest.fixture()
+def brevo(monkeypatch):
+    _FakeBrevo.seen = []; _FakeBrevo.mode = "ok"
+    server = http.server.HTTPServer(("127.0.0.1", 0), _FakeBrevo)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    for k in ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "MAIL_WEBHOOK_URL", "MAIL_WEBHOOK_SECRET"): monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("BREVO_API_URL", f"http://127.0.0.1:{server.server_port}/v3/smtp/email")
+    monkeypatch.setenv("BREVO_API_KEY", _FakeBrevo.key)
+    monkeypatch.setenv("BREVO_SENDER_EMAIL", "sender@gmail.com")
+    before = len(mailer.OUTBOX)
+    yield server
+    server.shutdown()
+    assert len(mailer.OUTBOX) == before, "a configured provider must not use the local-dev outbox"
+
+
+def test_t20_code_email_goes_through_brevo_and_verifies_the_account(anon, brevo):
+    assert start(anon, "brevo@gmail.com").status_code == 200
+    assert len(_FakeBrevo.seen) == 1
+    sent = _FakeBrevo.seen[0]
+    assert sent["headers"]["api-key"] == _FakeBrevo.key and sent["headers"]["content-type"] == "application/json"
+    msg = sent["body"]
+    assert msg["sender"] == {"name": "RepSight", "email": "sender@gmail.com"} and msg["to"] == [{"email": "brevo@gmail.com"}]
+    code = msg["textContent"].split("code is ")[1][:6]
+    assert code in msg["subject"] and code in msg["htmlContent"]
+    assert verify(anon, "brevo@gmail.com", code).status_code == 200
+
+
+def test_t20_brevo_takes_priority_and_the_banner_hides_the_key(brevo, monkeypatch):
+    monkeypatch.setenv("MAIL_WEBHOOK_URL", "https://script.google.com/macros/s/x/exec"); monkeypatch.setenv("MAIL_WEBHOOK_SECRET", "y" * 30)
+    assert mailer.configured() and "Brevo" in mailer.describe() and _FakeBrevo.key not in mailer.describe()
+
+
+def test_t20_a_wrong_key_gives_a_helpful_reason_but_never_shows_the_key(anon, brevo, monkeypatch):
+    monkeypatch.setenv("BREVO_API_KEY", "xkeysib-WRONG-key-9999999999")
+    r = start(anon, "wrongkey@gmail.com")
+    assert r.status_code == 502 and "WRONG-key" not in r.text and "xkeysib" not in r.text
+    con = db.conn(); n = con.execute("SELECT COUNT(*) FROM pending_signup WHERE email='wrongkey@gmail.com'").fetchone()[0]; con.close()
+    assert n == 0, "a pending sign-up was left behind although no email was sent"
+    with pytest.raises(mailer.MailError) as caught:
+        mailer.send("a@gmail.com", "hi", "body")
+    assert "401" in str(caught.value) and "WRONG-key" not in str(caught.value) and "WRONG-key" not in mailer.explain(caught.value)
+    assert "BREVO_API_KEY" in mailer.explain(caught.value), "the explanation should name the setting to fix"
+
+
+def test_t20_an_unverified_sender_is_explained(brevo):
+    _FakeBrevo.mode = "bad_sender"
+    with pytest.raises(mailer.MailError) as caught:
+        mailer.send("a@gmail.com", "hi", "body")
+    text = mailer.explain(caught.value)
+    assert "Sender is not valid" in str(caught.value) and "verified" in text and "Senders" in text
+
+
+def test_t20_the_key_is_never_sent_over_plain_http_to_a_real_host(monkeypatch):
+    monkeypatch.setenv("BREVO_API_URL", "http://api.brevo.com/v3/smtp/email")
+    monkeypatch.setenv("BREVO_API_KEY", "xkeysib-abc"); monkeypatch.setenv("BREVO_SENDER_EMAIL", "a@gmail.com")
+    with pytest.raises(mailer.MailError):
+        mailer.send("a@gmail.com", "hi", "body")
+
+
+def test_t20_render_blueprint_asks_for_brevo_not_smtp():
+    text = (ROOT / "render.yaml").read_text(encoding="utf8")
+    assert "BREVO_API_KEY" in text and "BREVO_SENDER_EMAIL" in text and "SMTP_PASSWORD" not in text
+    assert text.count("sync: false") >= 4 and not re.search(r"xkeysib-[A-Za-z0-9]{20,}", text), "a real key must never be committed"
+
+
+def test_t20_brevo_ip_block_is_explained_in_plain_words(brevo):
+    _FakeBrevo.mode = "ip_block"
+    with pytest.raises(mailer.MailError) as caught:
+        mailer.send("a@gmail.com", "hi", "body")
+    text = mailer.explain(caught.value)
+    assert "Authorised IPs" in text and "key is fine" in text and "Render" in text

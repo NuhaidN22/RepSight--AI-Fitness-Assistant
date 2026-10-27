@@ -32,7 +32,7 @@ else:
 print("[mail]", mailer.describe())
 if os.getenv("APP_ENV") == "production":
     # Fail closed: in production a missing mail setup would mean sign-up codes get printed in server logs instead of emailed.
-    if not mailer.configured(): raise RuntimeError("APP_ENV=production but no email is set up (SMTP_HOST, SMTP_USER and SMTP_PASSWORD, or MAIL_WEBHOOK_URL and MAIL_WEBHOOK_SECRET): refusing to start")
+    if not mailer.configured(): raise RuntimeError("APP_ENV=production but no email is set up (BREVO_API_KEY and BREVO_SENDER_EMAIL, or MAIL_WEBHOOK_URL and MAIL_WEBHOOK_SECRET, or SMTP_HOST, SMTP_USER and SMTP_PASSWORD): refusing to start")
     if not os.getenv("ALLOWED_ORIGINS"): print("[cors] ALLOWED_ORIGINS is empty: only pages served from this same address may use the API (right for a single address; set it only if the website is on a different address)")
 today = lambda: dt.date.today().isoformat()
 
