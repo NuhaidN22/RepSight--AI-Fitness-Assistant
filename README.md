@@ -1,4 +1,4 @@
-# RepSight
+# RepSight- NVIDIA x Nebius hackathon
 
 **An AI coach that watches your form and learns from your own training data.**
 Built for the NVIDIA x Nebius hackathon.
