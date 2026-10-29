@@ -2,6 +2,11 @@
 // The pose model (MediaPipe) only reports WHERE body joints are. Deciding what counts as a rep is
 // our job, and it depends on the exercise: a squat bends the knee, a deadlift/RDL bends the hip,
 // a push-up or curl bends the elbow. Each exercise below says which joint angle to watch.
+//
+// HOW A REP IS FOUND: not by fixed angle zones, but by the movement itself. The watched angle goes away from its
+// resting end, turns around, and comes most of the way back: that is one rep, however deep or shallow, with or without
+// a full lockout. Whether the rep was GOOD (reached the target depth, kept a straight back ...) is judged separately
+// and shows up as flags, so a shallow squat is counted and flagged "Shallow depth" instead of silently ignored.
 
 export interface Landmark { x: number; y: number; z?: number; visibility?: number }   // x,y are 0..1 fractions of the frame
 export type Joint = [a: number, vertex: number, c: number];               // landmark indices; angle measured AT the vertex
@@ -11,21 +16,20 @@ export interface ExerciseConfig {
   label: string;
   joints: { left: Joint; right: Joint };       // the same joint on each side of the body
   home: "extended" | "flexed";                 // the resting position every rep returns to
-  extendedAbove: number;                       // angle above this (degrees) = "extended"
-  flexedBelow: number;                         // angle below this (degrees) = "flexed"
+  minRom: number;                              // smallest swing (degrees) that still counts as a rep; smaller wiggles are noise
   target: number;                              // range-of-motion goal: extreme angle for a "full" rep
 }
 
 // MediaPipe indices: 11/12 shoulders, 13/14 elbows, 15/16 wrists, 23/24 hips, 25/26 knees, 27/28 ankles.
-// All thresholds are starting estimates, NOT validated - tune them on real videos.
+// All numbers are starting estimates, NOT validated - tune them on real videos.
 export const EXERCISES: Record<string, ExerciseConfig> = {
-  squat:  { key: "squat", label: "Squat",               joints: { left: [23, 25, 27], right: [24, 26, 28] }, home: "extended", extendedAbove: 160, flexedBelow: 125, target: 100 },
-  hinge:  { key: "hinge", label: "Deadlift / RDL",      joints: { left: [11, 23, 25], right: [12, 24, 26] }, home: "extended", extendedAbove: 160, flexedBelow: 125, target: 110 },
-  pushup: { key: "pushup", label: "Push-up",             joints: { left: [11, 13, 15], right: [12, 14, 16] }, home: "extended", extendedAbove: 150, flexedBelow: 110, target: 95 },
-  curl:   { key: "curl", label: "Biceps curl",         joints: { left: [11, 13, 15], right: [12, 14, 16] }, home: "extended", extendedAbove: 145, flexedBelow: 75,  target: 60 },
-  raise:  { key: "raise", label: "Dumbbell raise",      joints: { left: [23, 11, 13], right: [24, 12, 14] }, home: "flexed",   extendedAbove: 70,  flexedBelow: 35,  target: 80 },   // shoulder angle: arm down ~20, shoulder height ~90
-  chestpress: { key: "chestpress", label: "Chest press",  joints: { left: [11, 13, 15], right: [12, 14, 16] }, home: "flexed",   extendedAbove: 150, flexedBelow: 105, target: 160 },   // pressing away from the chest: rest = elbows bent, rep = arms pushed out
-  press:  { key: "press", label: "Overhead press",      joints: { left: [11, 13, 15], right: [12, 14, 16] }, home: "flexed",   extendedAbove: 160, flexedBelow: 100, target: 165 },
+  squat:  { key: "squat", label: "Squat",               joints: { left: [23, 25, 27], right: [24, 26, 28] }, home: "extended", minRom: 40, target: 100 },
+  hinge:  { key: "hinge", label: "Deadlift / RDL",      joints: { left: [11, 23, 25], right: [12, 24, 26] }, home: "extended", minRom: 35, target: 110 },
+  pushup: { key: "pushup", label: "Push-up",             joints: { left: [11, 13, 15], right: [12, 14, 16] }, home: "extended", minRom: 40, target: 95 },
+  curl:   { key: "curl", label: "Biceps curl",         joints: { left: [11, 13, 15], right: [12, 14, 16] }, home: "extended", minRom: 40, target: 60 },
+  raise:  { key: "raise", label: "Dumbbell raise",      joints: { left: [23, 11, 13], right: [24, 12, 14] }, home: "flexed",   minRom: 30, target: 80 },   // shoulder angle: arm down ~20, shoulder height ~90
+  chestpress: { key: "chestpress", label: "Chest press",  joints: { left: [11, 13, 15], right: [12, 14, 16] }, home: "flexed",   minRom: 45, target: 160 },   // pressing away from the chest: rest = elbows bent, rep = arms pushed out
+  press:  { key: "press", label: "Overhead press",      joints: { left: [11, 13, 15], right: [12, 14, 16] }, home: "flexed",   minRom: 45, target: 165 },
 };
 
 export interface PostureMetrics { torsoLean: number | null; elbowDrift: number | null; bodyLine: number | null }
@@ -55,6 +59,80 @@ export function angle3(a: Landmark, b: Landmark, c: Landmark): number {
 const jointAngle = (lm: Landmark[], world: Landmark[] | undefined, j: Joint, aspect: number) =>
   world && world[j[0]] && world[j[1]] && world[j[2]] ? angle3(world[j[0]], world[j[1]], world[j[2]]) : angleAt(lm[j[0]], lm[j[1]], lm[j[2]], aspect);
 
+// ---- cleaning the angle signal ---------------------------------------------------------------------------------------
+const median3 = (a: number, b: number, c: number) => Math.max(Math.min(a, b), Math.min(Math.max(a, b), c));
+
+/** Removes one-frame landmark glitches (median of the last three readings), then smooths by TIME, not by frame count,
+ *  so the result does not depend on whether the video runs at 8 or 60 frames per second. */
+export class AngleFilter {
+  private raw: number[] = []; private y: number | null = null; private t = 0;
+  private tauMs: number;
+  constructor(tauMs = 60) { this.tauMs = tauMs; }
+  reset(): void { this.raw = []; this.y = null; }
+  /** Returns { clean: glitch-free angle (keeps the true peaks), smooth: the same, low-pass filtered }. */
+  push(angle: number, tMs: number): { clean: number; smooth: number } {
+    this.raw.push(angle); if (this.raw.length > 3) this.raw.shift();
+    const clean = this.raw.length === 3 ? median3(this.raw[0], this.raw[1], this.raw[2]) : angle;
+    const dt = tMs - this.t; this.t = tMs;
+    if (this.y === null || dt > 1500 || dt < 0) this.y = clean;               // first sample, or a gap/seek: start fresh
+    else this.y += (1 - Math.exp(-dt / this.tauMs)) * (clean - this.y);
+    return { clean, smooth: this.y };
+  }
+}
+
+// ---- finding reps in the angle signal ---------------------------------------------------------------------------------
+export interface Cycle { rawMin: number; rawMax: number; durationS: number }
+
+/** Counts swing-and-return cycles in one angle signal using RELATIVE movement. States: resting at "home" -> going "out" ->
+ *  turned around and coming "back" -> counted once it is most of the way home. A swing smaller than minRom is ignored as noise;
+ *  a turn-around that is only a small bounce is treated as the same rep. Works the same whether home is the high or low angle. */
+export class RepDetector {
+  state: "home" | "out" | "back" = "home";
+  private hi = 0; private lo = 0; private bmax = 0; private tHi = 0; private tStart = 0; private lastT = 0; private started = false;
+  private rawMin = 180; private rawMax = 0;
+  private readonly turn: number;                           // how far the signal must reverse before it counts as a turn-around
+  private homeHigh: boolean; private minRom: number;
+  constructor(homeHigh: boolean, minRom: number) { this.homeHigh = homeHigh; this.minRom = minRom; this.turn = Math.min(14, Math.max(8, 0.25 * minRom)); }
+  private flip(v: number) { return this.homeHigh ? v : -v; }   // work in units where home is always the high end
+  private track(angle: number) { this.rawMin = Math.min(this.rawMin, angle); this.rawMax = Math.max(this.rawMax, angle); }
+
+  /** smooth: the filtered angle used to follow the movement; clean: the unsmoothed one, used for the true min/max of a rep. */
+  step(smooth: number, tMs: number, clean = smooth): Cycle | null {
+    const x = this.flip(smooth);
+    if (!this.started) { this.started = true; this.hi = x; this.tHi = tMs; this.lastT = tMs; }
+    const dt = Math.max(0, tMs - this.lastT) / 1000; this.lastT = tMs;
+    if (this.state === "home") {
+      if (x >= this.hi) { this.hi = x; this.tHi = tMs; }
+      else this.hi = Math.max(x, this.hi - 4 * dt);          // a lone spike fades away instead of hiding the next rep
+      if (x <= this.hi - this.turn) {                         // started to leave home
+        this.state = "out"; this.lo = x; this.tStart = this.tHi;
+        const homeAngle = this.flip(this.hi); this.rawMin = Math.min(homeAngle, clean); this.rawMax = Math.max(homeAngle, clean);
+      }
+      return null;
+    }
+    this.track(clean);
+    if (this.state === "out") {
+      this.lo = Math.min(this.lo, x);
+      if (x >= this.hi - this.turn * 0.5 && this.hi - this.lo < this.minRom) {   // came straight back: it went nowhere, not a rep
+        this.state = "home"; this.hi = Math.max(this.hi, x); this.tHi = tMs; return null;
+      }
+      if (x >= this.lo + this.turn) { this.state = "back"; this.bmax = x; }       // turned around
+      return null;
+    }
+    // state === "back"
+    this.bmax = Math.max(this.bmax, x);
+    const amp = this.hi - this.lo, mostlyHome = this.lo + 0.65 * amp;
+    if (x <= this.bmax - this.turn && this.bmax < mostlyHome) { this.state = "out"; this.lo = Math.min(this.lo, x); return null; }   // a bounce: same rep
+    if (x >= mostlyHome || x >= this.hi - this.turn) {
+      const durationS = (tMs - this.tStart) / 1000;
+      const cycle: Cycle = { rawMin: this.rawMin, rawMax: this.rawMax, durationS };
+      this.state = "home"; this.hi = x; this.tHi = tMs;
+      return amp >= this.minRom && durationS >= 0.25 ? cycle : null;
+    }
+    return null;
+  }
+}
+
 // Posture numbers measured over one rep. Only side-on frames count, because lean and elbow drift
 // cannot be measured from the front. Angles: lean = shoulder-hip line from vertical; drift = how far the
 // elbow sits from the shoulder (as a fraction of torso length); bodyLine = shoulder-hip-ankle angle.
@@ -63,6 +141,7 @@ class Posture {
   reset(): void { this.torso = 0; this.drift = 0; this.line = 180; this.seen = false; }
   add(lm: Landmark[], left: boolean, aspect: number): void {
     const S = lm[left ? 11 : 12], S2 = lm[left ? 12 : 11], H = lm[left ? 23 : 24], E = lm[left ? 13 : 14], A = lm[left ? 27 : 28];
+    if (!S || !H || !S2 || !E || !A) return;
     if ((S.visibility ?? 1) < 0.4 || (H.visibility ?? 1) < 0.4) return;
     const len = Math.hypot((S.x - H.x) * aspect, S.y - H.y);
     if (len < 0.05 || Math.abs(S.x - S2.x) * aspect > 0.5 * len) return;      // too small or not side-on: skip
@@ -105,60 +184,44 @@ export interface Counter {
 export class RepCounter implements Counter {
   reps: Rep[] = [];
   angle: number | null = null;                 // latest smoothed angle, for the live UI
-  phase: "home" | "away" = "home";
   private side: "left" | "right" = "left";
-  private t0: number | null = null;
-  private min = 180; private max = 0;
-  private smoothed: number | null = null;
-  private homeExt: number | null = null;                         // most extreme angle seen while resting at home
+  private filter = new AngleFilter();
+  private det: RepDetector;
+  private post = new Posture();
 
   cfg: ExerciseConfig;
-  constructor(cfg: ExerciseConfig) { this.cfg = cfg; }
+  constructor(cfg: ExerciseConfig) { this.cfg = cfg; this.det = new RepDetector(cfg.home === "extended", cfg.minRom); }
   get label() { return this.cfg.label; }
   get exercise() { return this.cfg.label; }
   get exerciseKey() { return this.cfg.key; }
   get vertex() { return this.cfg.joints[this.side][1]; }
-  private post = new Posture();
+  get phase(): "home" | "away" { return this.det.state === "home" ? "home" : "away"; }
 
-  reset(): void { this.reps = []; this.angle = null; this.phase = "home"; this.t0 = null; this.smoothed = null; this.homeExt = null; this.min = 180; this.max = 0; this.post.reset(); }
-
-  private isHome(a: number) { return this.cfg.home === "extended" ? a > this.cfg.extendedAbove : a < this.cfg.flexedBelow; }
-  private isAway(a: number) { return this.cfg.home === "extended" ? a < this.cfg.flexedBelow : a > this.cfg.extendedAbove; }
+  reset(): void { this.reps = []; this.angle = null; this.filter.reset(); this.det = new RepDetector(this.cfg.home === "extended", this.cfg.minRom); this.post.reset(); }
 
   // Call once per video frame. Returns the rep if this frame completed one, otherwise null.
   update(lm: Landmark[], nowMs: number, aspect = 1, world?: Landmark[]): Rep | null {
-    const vis = (j: Joint) => Math.min(...j.map(i => lm[i].visibility ?? 1));
+    const vis = (j: Joint) => Math.min(...j.map(i => lm[i]?.visibility ?? 0));
     const L = vis(this.cfg.joints.left), R = vis(this.cfg.joints.right);
     // Sticky side choice: only switch if the other side is clearly better, so the angle does not jump mid-rep.
     if (this.side === "left" && R > L + 0.3) this.side = "right";
     else if (this.side === "right" && L > R + 0.3) this.side = "left";
     const j = this.cfg.joints[this.side];
-    if (vis(j) < 0.4) return null;                                    // joint not visible: skip, do not guess
+    if (vis(j) < 0.4) return null;                                    // this joint is not visible: skip, do not guess
 
-    const raw = jointAngle(lm, world, j, aspect);
-    this.smoothed = this.smoothed === null ? raw : 0.6 * this.smoothed + 0.4 * raw;   // damp pose jitter
-    const a = this.angle = this.smoothed;
+    const { clean, smooth } = this.filter.push(jointAngle(lm, world, j, aspect), nowMs);
+    this.angle = smooth;
+    const wasAway = this.det.state !== "home";
+    const cycle = this.det.step(smooth, nowMs, clean);
+    if (wasAway || this.det.state !== "home") this.post.add(lm, this.side === "left", aspect);
+    else this.post.reset();
+    if (!cycle) return null;
 
-    if (this.phase === "home") {
-      if (this.isHome(a)) {                                           // resting: remember the home extreme, not the zone edge
-        this.t0 = null; const e = this.homeExt;
-        this.homeExt = e === null ? a : this.cfg.home === "extended" ? Math.max(e, a) : Math.min(e, a);
-        this.min = this.max = this.homeExt; this.post.reset();
-      }
-      else { if (this.t0 === null) this.t0 = nowMs; this.min = Math.min(this.min, a); this.max = Math.max(this.max, a); this.post.add(lm, this.side === "left", aspect); }
-      if (this.isAway(a)) this.phase = "away";                        // reached the far end of the movement
-      return null;
-    }
-    this.min = Math.min(this.min, a); this.max = Math.max(this.max, a); this.post.add(lm, this.side === "left", aspect);
-    if (this.isHome(a)) {                                             // back to rest: one full cycle done
-      this.phase = "home";
-      const fullRange = this.cfg.home === "extended" ? this.min <= this.cfg.target : this.max >= this.cfg.target;
-      const metrics = this.post.result(), { flags, postureOk } = rateRep(this.cfg.key, fullRange, metrics);
-      const rep: Rep = { index: this.reps.length + 1, minAngle: Math.round(this.min), maxAngle: Math.round(this.max),
-                         durationS: +(((nowMs - (this.t0 ?? nowMs)) / 1000).toFixed(1)), fullRange, postureOk, flags, metrics };
-      this.t0 = null; this.homeExt = null; this.post.reset(); this.reps.push(rep); return rep;
-    }
-    return null;
+    const fullRange = this.cfg.home === "extended" ? cycle.rawMin <= this.cfg.target : cycle.rawMax >= this.cfg.target;
+    const metrics = this.post.result(), { flags, postureOk } = rateRep(this.cfg.key, fullRange, metrics);
+    const rep: Rep = { index: this.reps.length + 1, minAngle: Math.round(cycle.rawMin), maxAngle: Math.round(cycle.rawMax),
+                       durationS: +cycle.durationS.toFixed(1), fullRange, postureOk, flags, metrics };
+    this.post.reset(); this.reps.push(rep); return rep;
   }
 }
 
@@ -185,22 +248,27 @@ export function resolveExercise(name: string): ExerciseConfig | null {
   return hit ? EXERCISES[hit[1]] : null;
 }
 
-// Unknown or blank workout: learn the movement from the person's own body instead of fixed angles.
+// Unknown or blank workout: learn the movement from the person's own body instead of presets.
 // 1) watch knee, hip, elbow and shoulder angles; 2) lock onto the joint that swings the most (>= 40 degrees);
-// 3) set thresholds as fractions of THIS person's observed range; 4) count swing-and-return cycles.
+// 3) REPLAY the last few seconds through the rep detector, so the rep that was already under way is not lost; 4) count cycles.
 const JOINT_TYPES: Record<string, { left: Joint; right: Joint }> = {
   knee: { left: [23, 25, 27], right: [24, 26, 28] },
   hip: { left: [11, 23, 25], right: [12, 24, 26] },
   elbow: { left: [11, 13, 15], right: [12, 14, 16] },
   shoulder: { left: [23, 11, 13], right: [24, 12, 14] },        // arm swing: front/lateral raises
 };
+interface Frame { t: number; aspect: number; lm: Landmark[]; side: Record<string, "left" | "right">; clean: Record<string, number> }
+const HISTORY_FRAMES = 600;
+
 export class AutoCounter implements Counter {
   reps: Rep[] = []; angle: number | null = null; chosen: string | null = null;
   private sm: Record<string, number> = {}; private first: Record<string, number> = {};
   private lo: Record<string, number> = {}; private hi: Record<string, number> = {};
+  private filters: Record<string, AngleFilter> = {};
   private side: Record<string, "left" | "right"> = { knee: "left", hip: "left", elbow: "left", shoulder: "left" };
-  private phase: "home" | "away" = "home"; private t0: number | null = null;
-  private min = 180; private max = 0; private best = 0; private homeExt: number | null = null;
+  private history: Frame[] = [];
+  private det: RepDetector | null = null; private fchosen = new AngleFilter();
+  private best = 0;
   private minRange: number;
   constructor(minRange = 40) { this.minRange = minRange; }                                   // degrees of swing needed before locking on
   private n = 0; private forward = 0; private horiz = 0; private wristUp = 0; private bent = 0;   // posture stats used to name the exercise
@@ -215,12 +283,13 @@ export class AutoCounter implements Counter {
   // Posture cues from the arm/leg side that is being tracked (aspect-corrected like the angles).
   private observe(lm: Landmark[], type: string, aspect: number) {
     const left = this.side[type] === "left", S = lm[left ? 11 : 12], H = lm[left ? 23 : 24], W = lm[left ? 15 : 16], A = lm[left ? 27 : 28];
+    if (!S || !H || !W || !A) return;
     this.n++;
     if (Math.abs(S.x - A.x) * aspect > Math.abs(S.y - A.y)) this.horiz++;                          // body lying horizontal
     if (S.y - W.y > 0.4 * (Math.hypot((S.x - H.x) * aspect, S.y - H.y) || 1)) this.wristUp++;      // wrist clearly overhead (curls only reach shoulder height)
-    if (Math.atan2(Math.abs(S.x - H.x) * aspect, Math.abs(S.y - H.y)) > 0.61) this.bent++;
+    if (Math.atan2(Math.abs(S.x - H.x) * aspect, Math.abs(S.y - H.y)) > 0.61) this.bent++;          // torso > ~35 deg from vertical
     const torso = Math.hypot((S.x - H.x) * aspect, S.y - H.y) || 1;
-    if (Math.abs(S.y - W.y) < 0.3 * torso && Math.abs(S.x - W.x) * aspect > 0.6 * torso) this.forward++;   // hand level with shoulder and far in front: pressing forward          // torso > ~35 deg from vertical
+    if (Math.abs(S.y - W.y) < 0.3 * torso && Math.abs(S.x - W.x) * aspect > 0.6 * torso) this.forward++;   // hand level with shoulder and far in front: pressing forward
   }
   // Exercise name inferred from WHICH joint moves plus posture. Heuristic: a best guess, not a certainty.
   get exercise(): string | null {
@@ -244,19 +313,56 @@ export class AutoCounter implements Counter {
   }
   get label() { return this.chosen ? `${this.exercise} · auto (${Math.round(this.best)}° range)` : "Detecting movement…"; }
 
-  reset(): void { Object.assign(this, { hipBox: null, shBox: null, torsoLen: 0, reps: [], angle: null, chosen: null, sm: {}, first: {}, lo: {}, hi: {}, phase: "home", t0: null, min: 180, max: 0, best: 0, homeExt: null, n: 0, forward: 0, horiz: 0, wristUp: 0, bent: 0 }); this.post.reset(); }
+  reset(): void {
+    Object.assign(this, { hipBox: null, shBox: null, torsoLen: 0, reps: [], angle: null, chosen: null, sm: {}, first: {}, lo: {}, hi: {}, filters: {}, history: [], det: null, best: 0, n: 0, forward: 0, horiz: 0, wristUp: 0, bent: 0 });
+    this.fchosen = new AngleFilter(); this.post.reset();
+  }
+
+  // Start (or restart) counting on one joint, replaying the frames already seen so no rep that was under way is lost.
+  private lockOn(type: string): Rep | null {
+    this.chosen = type; this.reps = []; this.best = 0; this.n = 0; this.horiz = 0; this.wristUp = 0; this.bent = 0; this.forward = 0; this.post.reset();
+    this.det = new RepDetector(this.first[type] > (this.lo[type] + this.hi[type]) / 2, 35);   // rest = where the set started
+    this.fchosen = new AngleFilter();
+    let last: Rep | null = null;
+    for (const f of this.history) last = this.feed(type, f) ?? last;
+    return last;
+  }
+
+  // One frame of the chosen joint through the detector.
+  private feed(type: string, f: Frame): Rep | null {
+    const det = this.det!; const c = f.clean[type];
+    if (c === undefined) return null;
+    const { clean, smooth } = this.fchosen.push(c, f.t);
+    this.angle = smooth;
+    this.side[type] = f.side[type];
+    this.observe(f.lm, type, f.aspect);
+    const wasAway = det.state !== "home";
+    const cycle = det.step(smooth, f.t, clean);
+    if (wasAway || det.state !== "home") this.post.add(f.lm, f.side[type] === "left", f.aspect);
+    else this.post.reset();
+    if (!cycle) return null;
+    const rom = cycle.rawMax - cycle.rawMin; this.best = Math.max(this.best, rom);
+    const fullRange = rom >= 0.8 * this.best;                            // vs your own best
+    const metrics = this.post.result(), { flags, postureOk } = rateRep(this.exerciseKey, fullRange, metrics);
+    const rep: Rep = { index: this.reps.length + 1, minAngle: Math.round(cycle.rawMin), maxAngle: Math.round(cycle.rawMax),
+      durationS: +cycle.durationS.toFixed(1), fullRange, postureOk, flags, metrics };
+    this.post.reset(); this.reps.push(rep); return rep;
+  }
 
   update(lm: Landmark[], nowMs: number, aspect = 1, world?: Landmark[]): Rep | null {
+    const frame: Frame = { t: nowMs, aspect, lm, side: { ...this.side }, clean: {} };
     for (const [type, sides] of Object.entries(JOINT_TYPES)) {          // 1) track every candidate joint
-      const vis = (j: Joint) => Math.min(...j.map(i => lm[i].visibility ?? 1));
+      const vis = (j: Joint) => Math.min(...j.map(i => lm[i]?.visibility ?? 0));
       const cur = this.side[type], other = cur === "left" ? "right" : "left";
       if (vis(sides[other]) > vis(sides[cur]) + 0.3) this.side[type] = other;
+      frame.side[type] = this.side[type];
       const j = sides[this.side[type]];
       if (vis(j) < 0.4) continue;
-      const raw = jointAngle(lm, world, j, aspect);
-      const a = (this.sm[type] = type in this.sm ? 0.6 * this.sm[type] + 0.4 * raw : raw);
-      this.first[type] ??= a;
-      this.lo[type] = Math.min(this.lo[type] ?? a, a); this.hi[type] = Math.max(this.hi[type] ?? a, a);
+      const { clean, smooth } = (this.filters[type] ??= new AngleFilter()).push(jointAngle(lm, world, j, aspect), nowMs);
+      frame.clean[type] = clean;
+      this.sm[type] = smooth;
+      this.first[type] ??= smooth;
+      this.lo[type] = Math.min(this.lo[type] ?? smooth, smooth); this.hi[type] = Math.max(this.hi[type] ?? smooth, smooth);
     }
     const ok = (i: number) => (lm[i]?.visibility ?? 1) >= 0.4;
     if (ok(11) && ok(12) && ok(23) && ok(24)) {
@@ -264,6 +370,8 @@ export class AutoCounter implements Counter {
       this.hipBox = this.track(this.hipBox, hx, hy); this.shBox = this.track(this.shBox, sx, sy);
       this.torsoLen = Math.max(this.torsoLen, Math.hypot(sx - hx, sy - hy));
     }
+    this.history.push(frame); if (this.history.length > HISTORY_FRAMES) this.history.shift();
+
     // 2) lock onto the joint that moves most, but only when it clearly beats the others (jitter on a hidden
     //    joint can swing 40+ degrees). Until the first rep finishes we may still switch to a clearly bigger mover.
     const legsAllowed = this.torsoMoved;
@@ -272,34 +380,14 @@ export class AutoCounter implements Counter {
     const dominant = !!top && top[1] >= this.minRange && (top[1] >= 1.3 * runnerUp || top[1] >= 80);
     if (!this.chosen) {
       if (!dominant) return null;
-      this.chosen = top[0];
-    } else if (this.reps.length === 0 && this.phase === "home" && dominant && top[0] !== this.chosen && top[1] > 1.3 * (this.hi[this.chosen] - this.lo[this.chosen])) {
-      this.chosen = top[0]; this.homeExt = null; this.t0 = null; this.n = 0; this.horiz = 0; this.wristUp = 0; this.bent = 0; this.post.reset();
+      this.lockOn(top[0]);                                            // replays history; those reps are in this.reps
+      return this.reps.length ? this.reps[this.reps.length - 1] : null;
     }
-    const t = this.chosen!; if (!(t in this.sm)) return null;
-    this.observe(lm, t, aspect);
-    const a = (this.angle = this.sm[t]), range = this.hi[t] - this.lo[t];
-    const lowZone = this.lo[t] + 0.3 * range, highZone = this.hi[t] - 0.3 * range;   // 3) thresholds from YOUR range
-    const homeHigh = this.first[t] > (this.lo[t] + this.hi[t]) / 2;                 // rest = where the set started
-    const isHome = homeHigh ? a >= highZone : a <= lowZone, isAway = homeHigh ? a <= lowZone : a >= highZone;
-    if (this.phase === "home") {
-      if (isHome) {
-        this.t0 = null; const e = this.homeExt;
-        this.homeExt = e === null ? a : homeHigh ? Math.max(e, a) : Math.min(e, a);
-        this.min = this.max = this.homeExt; this.post.reset();
-      } else { if (this.t0 === null) this.t0 = nowMs; this.min = Math.min(this.min, a); this.max = Math.max(this.max, a); this.post.add(lm, this.side[t] === "left", aspect); }
-      if (isAway) this.phase = "away";
-      return null;
+    if (this.reps.length === 0 && this.det!.state === "home" && dominant && top[0] !== this.chosen && top[1] > 1.3 * (this.hi[this.chosen] - this.lo[this.chosen])) {
+      this.lockOn(top[0]);
+      return this.reps.length ? this.reps[this.reps.length - 1] : null;
     }
-    this.min = Math.min(this.min, a); this.max = Math.max(this.max, a); this.post.add(lm, this.side[t] === "left", aspect);
-    if (!isHome) return null;
-    this.phase = "home";                                                 // 4) one full cycle completed
-    const rom = this.max - this.min; this.best = Math.max(this.best, rom);
-    const fullRange = rom >= 0.8 * this.best;                            // vs your own best
-    const metrics = this.post.result(), { flags, postureOk } = rateRep(this.exerciseKey, fullRange, metrics);
-    const rep: Rep = { index: this.reps.length + 1, minAngle: Math.round(this.min), maxAngle: Math.round(this.max),
-      durationS: +(((nowMs - (this.t0 ?? nowMs)) / 1000).toFixed(1)), fullRange, postureOk, flags, metrics };
-    this.t0 = null; this.homeExt = null; this.post.reset(); this.reps.push(rep); return rep;
+    return this.feed(this.chosen, frame);
   }
 }
 

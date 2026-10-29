@@ -373,6 +373,7 @@ function pickTarget(poses: Landmark[][]): number {
     const t = torsoOf(poses[best]);
     if (t) target = t.c;
   }
+  if (best < 0 && poses.length === 1 && !locked) return 0; // only one person and torso partly hidden (seated, machine): still follow them
   return best;
 }
 
@@ -474,13 +475,15 @@ function onPose(p: Landmark[], now: number, world?: Landmark[]): void {
   setCheck('chk-body', bodyVisible ? 'ok' : 'bad', bodyVisible ? 'Body in frame' : 'Body not visible');
   setCheck('chk-side', view.state, view.state === 'ok' ? 'Side view' : view.state === 'warn' ? 'Turn a bit more sideways' : 'Facing the camera');
 
+  // Keep counting even when part of the body is hidden: the counter skips joints it cannot see by itself,
+  // so a seated press or an upper-body-only clip still counts. Only warn.
   if (!bodyVisible) {
     badFrames += 1;
-    if (badFrames > GRACE_FRAMES) setHint('Step back: I need to see your whole body');
-    return;
+    if (badFrames > GRACE_FRAMES) setHint('Part of your body is hidden: counting what I can see. Step back for full checks');
+  } else {
+    badFrames = 0;
+    setHint(view.state === 'bad' ? 'Turn side-on for lean and elbow checks (rep counting still works)' : '');
   }
-  badFrames = 0;
-  setHint(view.state === 'bad' ? 'Turn side-on for lean and elbow checks (rep counting still works)' : '');
 
   const rep = counter.update(p, now, cv.width / cv.height, world);
   const deg = counter.angle;
@@ -609,12 +612,23 @@ function fail(error: unknown): void {
   else showError(`Something went wrong: ${messageOf(error)}`);
 }
 
+/** Uploaded clips play in real time, so a slow device would skip frames and miss fast reps. Slow the clip down
+ *  when detection takes longer than a frame, and speed back up (to normal) when it keeps up. */
+let detectMs = 0;
+function pace(ms: number): void {
+  detectMs = detectMs ? 0.9 * detectMs + 0.1 * ms : ms;
+  const want = Math.max(0.25, Math.min(1, 33 / Math.max(detectMs, 1)));
+  if (Math.abs(v.playbackRate - want) > 0.1) v.playbackRate = want;
+}
+
 function loop(model: PoseDetector): void {
   if (!running) return;
   try {
     if (v.readyState >= 2) {
       cx.drawImage(v, 0, 0, cv.width, cv.height);
-      const result = model.detectForVideo(v, performance.now());
+      const t0 = performance.now();
+      const result = model.detectForVideo(v, t0);
+      if (isFile) pace(performance.now() - t0);
       detectedPoses = result.landmarks;
       const who = pickTarget(result.landmarks);
       drawOthers(result.landmarks, who);
@@ -635,6 +649,8 @@ async function begin(size: ModelSize): Promise<void> {
   accent = getComputedStyle(document.documentElement).getPropertyValue('--ac2').trim() || accent;
   const mine = session;
   if (isFile) await identifyFile(mine);
+  detectMs = 0;
+  v.playbackRate = 1;
   await v.play();
   fitCanvas();
   running = true;
